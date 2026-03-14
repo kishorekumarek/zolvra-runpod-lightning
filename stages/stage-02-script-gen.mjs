@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { getSupabase } from '../lib/supabase.mjs';
 import { createNexusCard, awaitNexusDecision } from '../lib/nexus-client.mjs';
 import { withRetry } from '../lib/retry.mjs';
-import { withRateLimit } from '../lib/claude-rate-limiter.mjs';
+import { callClaude } from '../../shared/claude.mjs';
 
 const CLAUDE_SYSTEM_PROMPT_TEMPLATE = `You are a Tamil children's story scriptwriter for the YouTube channel @tinytamiltales.
 
@@ -121,9 +121,6 @@ async function generateScript(concept, characters, episodeNumber) {
     return getSampleScript(concept, episodeNumber);
   }
 
-  const Anthropic = (await import('@anthropic-ai/sdk')).default;
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
   const characterJson = JSON.stringify(characters.map(c => ({
     name: c.name,
     description: c.description,
@@ -135,15 +132,15 @@ async function generateScript(concept, characters, episodeNumber) {
     .replace('{EPISODE_NUMBER}', String(episodeNumber))
     .replace('{TARGET_DURATION_SECONDS}', String(concept.targetDurationSeconds || 300));
 
-  const message = await withRateLimit(() => client.messages.create({
+  const message = await callClaude({
     model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
-    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+    maxTokens: 4096,
+    system: systemPrompt,
     messages: [{
       role: 'user',
       content: 'Generate the complete Tamil kids story script as specified. Return only valid JSON. No markdown fences.',
     }],
-  }));
+  });
 
   let text = message.content[0]?.text?.trim() || '';
   // Strip markdown code fences if present
