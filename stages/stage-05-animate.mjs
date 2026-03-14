@@ -28,19 +28,19 @@ function isNsfwError(err) {
 export async function runStage5(taskId, tracker, state = {}) {
   console.log('🎬 Stage 5: Scene animation...');
 
-  const { script, sceneImagePaths, characterMap, parentCardId, tmpDir } = state;
-  if (!script) throw new Error('Stage 5: script not found');
+  const { scenes, sceneImagePaths, characterMap, parentCardId, tmpDir } = state;
+  if (!scenes) throw new Error('Stage 5: scenes not found');
   if (!sceneImagePaths) throw new Error('Stage 5: sceneImagePaths not found');
 
   const sb = getSupabase();
   const sceneAnimPaths = {};
 
   // Process scenes in batches of 3 (avoid Kling rate limits)
-  const scenes = script.scenes.filter(s => sceneImagePaths[s.scene_number]);
+  const validScenes = scenes.filter(s => sceneImagePaths[s.scene_number]);
   const results = [];
 
-  for (let i = 0; i < scenes.length; i += 3) {
-    const batch = scenes.slice(i, i + 3);
+  for (let i = 0; i < validScenes.length; i += 3) {
+    const batch = validScenes.slice(i, i + 3);
     const batchResults = await Promise.allSettled(
       batch.map(scene => animateScene({
         taskId, scene,
@@ -51,17 +51,16 @@ export async function runStage5(taskId, tracker, state = {}) {
     );
     results.push(...batchResults.map((r, idx) => ({ ...r, scene: batch[idx] })));
 
-    if (i + 3 < scenes.length) {
-      // Small delay between batches
+    if (i + 3 < validScenes.length) {
       await new Promise(r => setTimeout(r, 5000));
     }
   }
 
   const failed = results.filter(r => r.status === 'rejected');
 
-  if (scenes.length > 0 && failed.length / scenes.length > NSFW_HALT_RATIO) {
+  if (validScenes.length > 0 && failed.length / validScenes.length > NSFW_HALT_RATIO) {
     throw new Error(
-      `Too many animation failures (${failed.length}/${scenes.length}, ${Math.round(failed.length / scenes.length * 100)}%). ` +
+      `Too many animation failures (${failed.length}/${validScenes.length}, ${Math.round(failed.length / validScenes.length * 100)}%). ` +
       `Errors: ${failed.map(f => f.reason?.message).join('; ')}`
     );
   }
@@ -93,17 +92,19 @@ export async function runStage5(taskId, tracker, state = {}) {
     await feedbackReviewAnimations({ taskId, sceneAnimPaths, parentCardId, sb });
   }
 
-  console.log(`✅ Stage 5 complete. ${Object.keys(sceneAnimPaths).length}/${scenes.length} scenes animated`);
+  console.log(`✅ Stage 5 complete. ${Object.keys(sceneAnimPaths).length}/${validScenes.length} scenes animated`);
   return { ...state, sceneAnimPaths };
 }
 
 async function animateScene({ taskId, scene, imagePath, storagePath, characterMap, tmpDir, tracker }) {
   if (!storagePath) throw new Error(`No storage path for scene ${scene.scene_number}`);
 
-  const motionParams = await getKlingParams(scene.motion_type || 'dialogue');
+  // New flat scene format has no motion_type — default to 'dialogue'
+  const motionType = scene.motion_type || 'dialogue';
+  const motionParams = await getKlingParams(motionType);
   const prompt = `${scene.visual_description} — ${motionParams.prompt_suffix}, gentle children's animation style`;
 
-  console.log(`  Submitting Hailuo job for scene ${scene.scene_number} (${scene.motion_type})...`);
+  console.log(`  Submitting Hailuo job for scene ${scene.scene_number}...`);
 
   let currentImagePath = imagePath;
   let currentStoragePath = storagePath;
@@ -143,13 +144,12 @@ async function animateScene({ taskId, scene, imagePath, storagePath, characterMa
     { maxRetries: 2, baseDelayMs: 10000, stage: STAGE, taskId }
   );
 
-  // Download animation
   const videoBuffer = await downloadKlingVideo(videoUrl);
 
   // Save locally
-  const sceneDir = join(tmpDir, 'scenes', `scene_${String(scene.scene_number).padStart(2, '0')}`);
-  await fs.mkdir(sceneDir, { recursive: true });
-  const animPath = join(sceneDir, 'animation.mp4');
+  const scenesDir = join(tmpDir, 'scenes');
+  await fs.mkdir(scenesDir, { recursive: true });
+  const animPath = join(scenesDir, `scene_${String(scene.scene_number).padStart(2, '0')}_anim.mp4`);
   await fs.writeFile(animPath, videoBuffer);
 
   // Upload to storage
@@ -166,7 +166,6 @@ async function animateScene({ taskId, scene, imagePath, storagePath, characterMa
     .eq('video_id', taskId)
     .eq('scene_number', scene.scene_number);
 
-  // Track cost
   const cost = calcAnimationCost(1);
   tracker.addCost(STAGE, cost);
 
@@ -184,9 +183,11 @@ async function resolveSignedUrl(storagePath, sceneNumber) {
 
 /** Re-generate scene image with an extra-safe prompt to avoid NSFW rejection. */
 async function regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracker }) {
-  const speakerNames = [...new Set((scene.lines || []).map(l => l.speaker))];
-  const primarySpeaker = speakerNames.find(n => n !== 'NARRATOR') || 'NARRATOR';
-  const character = characterMap?.[primarySpeaker] || characterMap?.['NARRATOR'];
+  // Look up character by scene.speaker (flat format — no scene.lines)
+  const character = characterMap?.[scene.speaker]
+    ?? characterMap?.[scene.speaker?.toUpperCase()]
+    ?? characterMap?.['NARRATOR']
+    ?? null;
 
   const extraSuffix = 'minimal characters, simple background, no physical contact between characters, wide shot, child-friendly';
   const prompt = buildScenePrompt(scene, character, extraSuffix);
@@ -197,9 +198,9 @@ async function regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracke
     { maxRetries: 3, baseDelayMs: 15000, stage: STAGE, taskId }
   );
 
-  const sceneDir = join(tmpDir, 'scenes', `scene_${String(scene.scene_number).padStart(2, '0')}`);
-  await fs.mkdir(sceneDir, { recursive: true });
-  const imagePath = join(sceneDir, 'image_safe.png');
+  const scenesDir = join(tmpDir, 'scenes');
+  await fs.mkdir(scenesDir, { recursive: true });
+  const imagePath = join(scenesDir, `scene_${String(scene.scene_number).padStart(2, '0')}_image_safe.png`);
   await fs.writeFile(imagePath, imageBuffer);
 
   const storagePath = await uploadSceneImage({
@@ -214,9 +215,9 @@ async function regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracke
 
 /** Create a freeze-frame 10s video from a still image as last-resort fallback. */
 async function staticImageFallback({ taskId, scene, imagePath, storagePath, tmpDir, tracker }) {
-  const sceneDir = join(tmpDir, 'scenes', `scene_${String(scene.scene_number).padStart(2, '0')}`);
-  await fs.mkdir(sceneDir, { recursive: true });
-  const animPath = join(sceneDir, 'animation.mp4');
+  const scenesDir = join(tmpDir, 'scenes');
+  await fs.mkdir(scenesDir, { recursive: true });
+  const animPath = join(scenesDir, `scene_${String(scene.scene_number).padStart(2, '0')}_anim.mp4`);
 
   await stillImageToVideo({ imagePath, duration: 10, outputPath: animPath });
 
