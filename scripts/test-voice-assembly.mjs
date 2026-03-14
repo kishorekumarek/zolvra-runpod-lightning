@@ -19,7 +19,7 @@ const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_R
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 const TASK_ID = 'a0eb49a6-f2ca-4427-8864-b3a0c95ec5c9';
 const TMP = '/tmp/zolvra-test-2clip-v2';
-const OUT = join(__dirname, '..', 'output', 'test-2clip-v6.mp4');
+const OUT = join(__dirname, '..', 'output', 'test-2clip-v8.mp4');
 const FFMPEG = process.env.FFMPEG_PATH || '/opt/homebrew/bin/ffmpeg';
 
 const TEST_SCENES = [
@@ -28,16 +28,16 @@ const TEST_SCENES = [
     speaker: 'narrator',
     emotion: 'gentle',
     environment: 'forest_rain',
-    text: 'Oru naal, kaatula rain penjitu irunthuchi. Paandi mayil thannoda friends-kita odi vanthaan.',
-    visual_description: 'Paandi the peacock running through gentle rain towards his friends in a lush green forest',
+    text: 'Oru naal, kaatula rain penjitu ninnuchi. Paandi mayil veliye vanthaan, sky-la paathaan. Anniki romba pretty-a irunthuchi — oru big rainbow colour colour-a thonachu!',
+    visual_description: 'Paandi the peacock stepping out from under a tree after rain, looking up at a colorful rainbow in a lush green forest, water droplets on leaves',
   },
   {
     scene_number: 2,
     speaker: 'paandi',
     emotion: 'excited',
     environment: 'forest_rain',
-    text: 'Ayyo, parunga! Rainbow irukku! Super-a irukulla?',
-    visual_description: 'Paandi pointing excitedly at a rainbow with wings spread wide, eyes bright with joy',
+    text: 'Ayyo, paarunga paarunga! Sky-la rainbow irukku! Romba beautiful-a irukku! Naan indha rainbow-va touch pannanum, aaguma? Dei Kitti, nee paathiya? Super-a iruku-la?',
+    visual_description: 'Paandi pointing excitedly at a rainbow with wings spread wide, calling to his friend Kitti the parrot, eyes bright with joy',
   },
 ];
 
@@ -101,16 +101,18 @@ async function main() {
     const audioBuffer = await callElevenLabs({ text: scene.text, voiceId, voiceSettings });
     await fs.writeFile(audioPath, audioBuffer);
     const audioDur = getDuration(audioPath);
-    console.log(`  Audio    : generated (${audioDur.toFixed(1)}s) — clip has ${(clipDur - audioDur).toFixed(1)}s ambient tail`);
+    // Use whichever is longer — never cut dialogue
+    const sceneDur = Math.max(clipDur, audioDur);
+    console.log(`  Audio    : generated (${audioDur.toFixed(1)}s) — scene duration: ${sceneDur.toFixed(1)}s`);
 
-    // Assemble with full clip duration + SFX loop + BGM segment
+    // Assemble: loop clip to cover full scene duration, overlay all audio streams
     const finalPath = join(TMP, `scene_${pad}_final.mp4`);
 
     if (sfxPath && bgmPath) {
       const fc = [
         `[1:a]volume=1.0[voice]`,
-        `[2:a]atrim=duration=${clipDur},asetpts=PTS-STARTPTS,volume=0.15[sfx]`,
-        `[3:a]atrim=duration=${clipDur},asetpts=PTS-STARTPTS,volume=0.12[bgm]`,
+        `[2:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.3[sfx]`,
+        `[3:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.12[bgm]`,
         `[voice][sfx][bgm]amix=inputs=3:duration=longest[aout]`,
       ].join(';');
 
@@ -120,7 +122,7 @@ async function main() {
         `-i "${audioPath}"`,
         `-stream_loop -1 -i "${sfxPath}"`,
         `-ss ${bgmOffset.toFixed(3)} -stream_loop -1 -i "${bgmPath}"`,
-        `-t ${clipDur}`,
+        `-t ${sceneDur}`,
         `-map 0:v`,
         `-filter_complex "${fc}"`,
         `-map "[aout]"`,
