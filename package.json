@@ -1,0 +1,26 @@
+{
+  "name": "youtube-ai-pipeline",
+  "version": "1.0.0",
+  "description": "Zolvra YouTube AI Content Pipeline for @tinytamiltales",
+  "type": "module",
+  "main": "pipeline/orchestrator.mjs",
+  "scripts": {
+    "migrate": "node scripts/run-db-migration.mjs",
+    "seed:settings": "node scripts/seed-pipeline-settings.mjs",
+    "seed:characters": "node scripts/seed-character-library.mjs",
+    "pipeline": "node scripts/run-pipeline.mjs",
+    "test:connections": "node scripts/test-connections.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.3",
+    "@google/generative-ai": "^0.21.0",
+    "@supabase/supabase-js": "^2.48.1",
+    "dotenv": "^16.4.7",
+    "googleapis": "^148.0.0",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.13.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

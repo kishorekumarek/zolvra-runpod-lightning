@@ -1,0 +1,9 @@
+# Weekly Research — Stage 0: Generate story concepts every Monday at 08:00 GST (04:00 UTC)
+# Runs Stage 0 which creates 3-5 story concept cards in NEXUS for Darl to select from.
+#
+# To install: crontab -e  (then add the line below)
+# Or use: openclaw cron add "0 4 * * 1" "cd /Users/friday/.openclaw/workspace/streams/youtube && node stages/stage-00-research.mjs >> /tmp/youtube-research.log 2>&1"
+#
+# Schedule: 0 4 * * 1 = Monday at 04:00 UTC = 08:00 GST (Dubai, GMT+4)
+
+0 4 * * 1 cd /Users/friday/.openclaw/workspace/streams/youtube && node stages/stage-00-research.mjs >> /tmp/youtube-research.log 2>&1

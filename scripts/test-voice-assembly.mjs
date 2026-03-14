@@ -48,6 +48,7 @@ async function callElevenLabs({ text, voiceId, voiceSettings }) {
     body: JSON.stringify({
       text,
       model_id: 'eleven_multilingual_v2',
+      language_code: 'ta',
       voice_settings: voiceSettings,
     }),
   });
