@@ -138,11 +138,11 @@ async function generateScript(concept, characters, episodeNumber) {
   const message = await withRateLimit(() => client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 4096,
+    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
     messages: [{
       role: 'user',
       content: 'Generate the complete Tamil kids story script as specified. Return only valid JSON. No markdown fences.',
     }],
-    system: systemPrompt,
   }));
 
   let text = message.content[0]?.text?.trim() || '';
