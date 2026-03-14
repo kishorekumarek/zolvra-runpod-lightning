@@ -20,11 +20,9 @@ export async function runStage9(taskId, tracker, state = {}) {
 
   const sb = getSupabase();
 
-  // Publish (make public)
-  await withRetry(
-    () => publishVideo({ youtubeVideoId }),
-    { maxRetries: 2, baseDelayMs: 10000, stage: STAGE, taskId }
-  );
+  // NOTE: Video was uploaded as unlisted in Stage 8.
+  // Stage 9 does NOT auto-publish — Darl reviews and makes public manually.
+  console.log(`  ℹ️  Video remains unlisted — awaiting Darl approval to go public.`);
 
   // Add to playlist
   await withRetry(
