@@ -2,7 +2,7 @@
 // ALWAYS human-gated
 import 'dotenv/config';
 import { getSupabase } from '../lib/supabase.mjs';
-import { createNexusCard, awaitNexusDecision } from '../lib/nexus-client.mjs';
+import { createNexusCard } from '../lib/nexus-client.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { callClaude } from '../../shared/claude.mjs';
 
@@ -32,8 +32,7 @@ EPISODE NUMBER: {EPISODE_NUMBER}
 TARGET DURATION: {TARGET_DURATION_SECONDS} seconds`;
 
 /**
- * Stage 2: Generate script via Claude, post to NEXUS for human review.
- * ALWAYS human-gated.
+ * Stage 2: Generate script via Claude, post to NEXUS for visibility (non-blocking).
  */
 export async function runStage2(taskId, tracker, state = {}) {
   console.log('📝 Stage 2: Generating script...');
@@ -101,16 +100,8 @@ export async function runStage2(taskId, tracker, state = {}) {
     stream: 'youtube',
   });
 
-  console.log(`  Script sent to NEXUS for review (card: ${cardId})`);
-  console.log('  ⏳ Waiting for Darl to approve script...');
-
-  const decision = await awaitNexusDecision(cardId);
-
-  if (!decision.approved) {
-    throw new Error(`Script rejected: ${decision.comment || 'No reason given'}. Re-run stage 2 with feedback.`);
-  }
-
-  console.log('✅ Script approved!');
+  console.log(`  Script posted to NEXUS for visibility (card: ${cardId})`);
+  console.log('✅ Script generated — continuing pipeline automatically.');
 
   return { ...state, script, episodeNumber };
 }

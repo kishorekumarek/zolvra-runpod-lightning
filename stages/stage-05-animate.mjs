@@ -5,7 +5,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getSupabase } from '../lib/supabase.mjs';
 import { isFeedbackCollectionMode } from '../lib/settings.mjs';
-import { createNexusCard, awaitNexusDecision } from '../lib/nexus-client.mjs';
+import { createNexusCard } from '../lib/nexus-client.mjs';
 import { submitKlingJob, pollKlingJob, downloadKlingVideo } from '../lib/kling.mjs';
 import { getKlingParams } from '../lib/motion-params.mjs';
 import { uploadSceneAnimation, getSignedUrl, BUCKETS } from '../lib/storage.mjs';
@@ -167,16 +167,5 @@ async function feedbackReviewAnimations({ taskId, sceneAnimPaths, parentCardId, 
     stream: 'youtube',
   });
 
-  const decision = await awaitNexusDecision(cardId);
-
-  await sb.from('pipeline_feedback').insert({
-    video_id: taskId,
-    stage:    STAGE,
-    decision: decision.approved ? 'approved' : 'denied',
-    comment:  decision.comment || null,
-  });
-
-  if (!decision.approved) {
-    throw new Error(`Stage 5 animations denied: ${decision.comment}`);
-  }
+  console.log(`  NEXUS animation review card created: ${cardId} (non-blocking)`);
 }
