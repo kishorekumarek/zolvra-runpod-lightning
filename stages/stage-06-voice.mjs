@@ -11,7 +11,7 @@ import { calcTTSCost } from '../lib/cost-tracker.mjs';
 import { VOICE_MAP, EMOTION_SETTINGS } from '../lib/voice-config.mjs';
 
 const STAGE = 6;
-const ELEVENLABS_BASE = 'https://api.us.elevenlabs.io/v1';
+const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
 /**
  * Call ElevenLabs TTS directly with per-emotion voice settings.
@@ -22,7 +22,7 @@ async function callElevenLabs({ text, voiceId, voiceSettings }) {
   if (!apiKey) throw new Error('ELEVENLABS_API_KEY not set');
 
   const response = await fetch(
-    `${ELEVENLABS_BASE}/text-to-speech/${voiceId}/stream`,
+    `${ELEVENLABS_BASE}/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
     {
       method: 'POST',
       headers: {
@@ -32,9 +32,7 @@ async function callElevenLabs({ text, voiceId, voiceSettings }) {
       body: JSON.stringify({
         text,
         model_id: 'eleven_v3',
-        language_code: 'ta',
-        voice_settings: { ...voiceSettings, speed: 0.92 },
-        output_format: 'mp3_44100_128',
+        voice_settings: {},
       }),
     }
   );

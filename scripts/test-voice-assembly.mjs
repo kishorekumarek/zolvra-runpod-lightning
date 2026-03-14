@@ -16,10 +16,10 @@ import { getBgmPath } from '../lib/bgm-selector.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-const ELEVENLABS_BASE = 'https://api.us.elevenlabs.io/v1';
+const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 const TASK_ID = 'a0eb49a6-f2ca-4427-8864-b3a0c95ec5c9';
 const TMP = '/tmp/zolvra-test-2clip-v2';
-const OUT = join(__dirname, '..', 'output', 'test-2clip-v5.mp4');
+const OUT = join(__dirname, '..', 'output', 'test-2clip-v6.mp4');
 const FFMPEG = process.env.FFMPEG_PATH || '/opt/homebrew/bin/ffmpeg';
 
 const TEST_SCENES = [
@@ -42,14 +42,13 @@ const TEST_SCENES = [
 ];
 
 async function callElevenLabs({ text, voiceId, voiceSettings }) {
-  const res = await fetch(`${ELEVENLABS_BASE}/text-to-speech/${voiceId}/stream`, {
+  const res = await fetch(`${ELEVENLABS_BASE}/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
     method: 'POST',
     headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       text,
       model_id: 'eleven_v3',
-      language_code: 'ta',
-      voice_settings: { ...voiceSettings, speed: 0.92 },
+      voice_settings: {},
     }),
   });
   if (!res.ok) throw new Error(`ElevenLabs error ${res.status}: ${await res.text()}`);
