@@ -31,7 +31,7 @@ export async function runStage3(taskId, tracker, state = {}) {
     const { data: chars, error } = await supabase
       .from('character_library')
       .select('*')
-      .eq('name', name)
+      .ilike('name', name)
       .eq('approved', true);
 
     if (error) throw new Error(`Character lookup failed for ${name}: ${error.message}`);

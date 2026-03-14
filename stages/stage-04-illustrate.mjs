@@ -3,6 +3,7 @@
 import 'dotenv/config';
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import Anthropic from '@anthropic-ai/sdk';
 import { getSupabase } from '../lib/supabase.mjs';
 import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
@@ -11,6 +12,34 @@ import { uploadSceneImage, getSceneImageUrl, BUCKETS } from '../lib/storage.mjs'
 import { createTmpDir } from '../lib/ffmpeg.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { calcImageCost } from '../lib/cost-tracker.mjs';
+
+/**
+ * Validate that an image contains only animals/birds with no human characters.
+ * Returns true if safe (no humans), false if humans detected.
+ */
+async function validateNoHumans(imageBuffer) {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const imageBase64 = imageBuffer.toString('base64');
+  const msg = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 10,
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/png', data: imageBase64 },
+        },
+        {
+          type: 'text',
+          text: 'Does this image show only animals/birds with NO human characters? Answer YES or NO.',
+        },
+      ],
+    }],
+  });
+  const answer = msg.content[0]?.text?.trim().toUpperCase();
+  return answer === 'YES';
+}
 
 const STAGE = 4;
 const MAX_SCENE_FAILURES = 5;
@@ -130,10 +159,23 @@ async function illustrateScene({ taskId, scene, characterMap, tmpDir, tracker })
   const prompt = buildScenePrompt(scene, character);
   console.log(`  Generating image for scene ${scene.scene_number} (${scene.speaker}/${scene.emotion})...`);
 
-  const imageBuffer = await withRetry(
+  let imageBuffer = await withRetry(
     () => generateSceneImage({ prompt, sceneNumber: scene.scene_number }),
     { maxRetries: 3, baseDelayMs: 15000, stage: STAGE, taskId }
   );
+
+  // Validate no human characters (max 2 retries)
+  let safePrompt = prompt;
+  for (let retry = 0; retry < 2; retry++) {
+    const isAnimalOnly = await validateNoHumans(imageBuffer);
+    if (isAnimalOnly) break;
+    console.warn(`  ⚠️  Scene ${scene.scene_number}: humans detected — retrying with animal-only prompt (attempt ${retry + 1}/2)`);
+    safePrompt = 'Animated storybook style, animals only, absolutely no humans or children. ' + safePrompt;
+    imageBuffer = await withRetry(
+      () => generateSceneImage({ prompt: safePrompt, sceneNumber: scene.scene_number }),
+      { maxRetries: 3, baseDelayMs: 15000, stage: STAGE, taskId }
+    );
+  }
 
   // Save locally
   const scenesDir = join(tmpDir, 'scenes');

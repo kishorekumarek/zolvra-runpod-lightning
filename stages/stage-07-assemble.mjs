@@ -25,19 +25,20 @@ const STAGE = 7;
  * Audio is overlaid within the clip window; remaining clip plays silently (ambient fills it).
  */
 function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, outputPath }) {
-  // Fix 1: use full clip duration, not audio duration
   const clipDuration = getDurationSeconds(clipPath);
+  const audioDuration = getDurationSeconds(audioPath);
+  const sceneDur = Math.max(clipDuration, audioDuration);
 
   if (sfxPath && bgmPath) {
-    // 3-audio mix: voice (1.0) + SFX loop (0.15) + BGM segment (0.12)
+    // 3-audio mix: voice (1.0) + SFX loop (0.3) + BGM segment (0.12)
     // input 0: video (stream_loop -1)
     // input 1: voice audio
     // input 2: SFX (stream_loop -1)
     // input 3: BGM (stream_loop -1, seek to bgmOffset)
     const fc = [
       `[1:a]volume=1.0[voice]`,
-      `[2:a]atrim=duration=${clipDuration},asetpts=PTS-STARTPTS,volume=0.15[sfx]`,
-      `[3:a]atrim=duration=${clipDuration},asetpts=PTS-STARTPTS,volume=0.12[bgm]`,
+      `[2:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.3[sfx]`,
+      `[3:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.12[bgm]`,
       `[voice][sfx][bgm]amix=inputs=3:duration=longest[aout]`,
     ].join(';');
 
@@ -47,7 +48,7 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
       `-i "${audioPath}"`,
       `-stream_loop -1 -i "${sfxPath}"`,
       `-ss ${bgmOffset.toFixed(3)} -stream_loop -1 -i "${bgmPath}"`,
-      `-t ${clipDuration}`,
+      `-t ${sceneDur}`,
       `-map 0:v`,
       `-filter_complex "${fc}"`,
       `-map "[aout]"`,
@@ -57,12 +58,12 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
     ].join(' ');
     execSync(cmd, { stdio: 'pipe' });
   } else {
-    // Fallback: voice only, full clip duration
+    // Fallback: voice only, loop clip to cover full scene duration
     const cmd = [
       `"${FFMPEG}" -y`,
       `-stream_loop -1 -i "${clipPath}"`,
       `-i "${audioPath}"`,
-      `-t ${clipDuration}`,
+      `-t ${sceneDur}`,
       `-map 0:v -map 1:a`,
       `-c:v libx264 -preset fast -crf 22`,
       `-c:a aac -b:a 192k`,
@@ -70,6 +71,8 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
     ].join(' ');
     execSync(cmd, { stdio: 'pipe' });
   }
+
+  return sceneDur;
 }
 
 /**
@@ -146,7 +149,7 @@ export async function runStage7(taskId, tracker, state = {}) {
     if (animPath) {
       const clipDuration = getDurationSeconds(animPath);
       console.log(`  🔧 Scene ${sceneNum}: merging clip + audio + SFX[${environment}] (clip ${clipDuration.toFixed(1)}s)...`);
-      mergeClipWithAudio({
+      const sceneDur = mergeClipWithAudio({
         clipPath: animPath,
         audioPath,
         sfxPath,
@@ -154,7 +157,7 @@ export async function runStage7(taskId, tracker, state = {}) {
         bgmOffset,
         outputPath: finalPath,
       });
-      bgmOffset += clipDuration;
+      bgmOffset += sceneDur;
     } else if (imagePath) {
       // No animation — use still image + audio (zoompan)
       const audioDuration = getDurationSeconds(audioPath);

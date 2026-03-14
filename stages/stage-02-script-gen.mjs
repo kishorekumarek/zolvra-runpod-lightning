@@ -24,50 +24,85 @@ async function getTamilStyleGuide() {
   return _tamilStyleGuide;
 }
 
+let _videoFeedback = null;
+async function getVideoFeedback() {
+  if (_videoFeedback) return _videoFeedback;
+  try {
+    _videoFeedback = await readFile(join(__dirname, '..', 'lib', 'video-feedback.md'), 'utf8');
+  } catch {
+    console.warn('  ⚠️  video-feedback.md not found — proceeding without it');
+    _videoFeedback = '';
+  }
+  return _videoFeedback;
+}
+
 /** Returns true if any Tamil Unicode characters (U+0B80–U+0BFF) are present. */
 function containsTamilUnicode(text) {
   return /[\u0B80-\u0BFF]/.test(text || '');
 }
 
-const VALID_SPEAKERS = new Set(['narrator', 'pandi', 'kitti', 'valli', 'children', 'elder']);
+const VALID_SPEAKERS = new Set(['narrator', 'kavin', 'kitti', 'valli', 'sparrows', 'elder']);
 const VALID_EMOTIONS = new Set(['excited', 'happy', 'sad', 'scared', 'gentle', 'whisper', 'angry', 'normal']);
 
-function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide }) {
-  const introCount     = Math.round(targetClips * 0.20);
-  const risingCount    = Math.round(targetClips * 0.35);
-  const climaxCount    = Math.round(targetClips * 0.25);
-  const resolutionCount = targetClips - introCount - risingCount - climaxCount;
-
+function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback }) {
   const characterJson = JSON.stringify(
     (characters || []).map(c => ({ name: c.name, description: c.description })),
     null, 2
   );
 
   const styleGuideSection = tamilStyleGuide
-    ? `\n\n---\nTAMIL STYLE GUIDE (HARD CONSTRAINTS — MUST FOLLOW):\n${tamilStyleGuide}\n\nCRITICAL LANGUAGE RULES (non-negotiable):\n- NEVER use Tamil Unicode script (அ ஆ இ etc.) — ALL text must be romanized English letters only\n- NEVER use ழ words: no mazhai/vazhi/azhaga/ezhil/ezhunthaan — use English equivalent (see style guide)\n- ALWAYS use colloquial contractions: irukulla not irukku illa\n- NEVER use literary story openings — start warm and direct\n- First mention of each character: Paandi=Paandi mayil, Kitti=Kitti kili, Valli=Valli kuruvi\n- Use penji ninnuchi not mudinchitchu\n---`
+    ? `\n\n---\nTAMIL STYLE GUIDE (HARD CONSTRAINTS — MUST FOLLOW):\n${tamilStyleGuide}\n---`
     : '';
 
-  return `You are a Tamil children's story scriptwriter for the YouTube channel @tinytamiltales.${styleGuideSection}
+  const feedbackSection = videoFeedback
+    ? `\n\n---\nVIDEO PRODUCTION FEEDBACK (APPLY TO THIS VIDEO):\n${videoFeedback}\n---`
+    : '';
+
+  return `You are a Tamil children's story scriptwriter for the YouTube channel @tinytamiltales.${styleGuideSection}${feedbackSection}
 
 TASK: Generate exactly ${targetClips} scenes for a Tamil kids story. Each scene is ONE visual moment.
 
-RULES:
+HARD RULES (non-negotiable):
 1. Return ONLY a valid JSON object. No markdown. No explanation. No wrapping.
 2. The "scenes" array must contain EXACTLY ${targetClips} objects — no more, no fewer.
-3. Each scene "text" must be in ROMANIZED Tamil (English letters only — NO Tamil Unicode, NO Tamil script characters).
+3. Each scene "text" must be in ROMANIZED Tamil (English letters only — NO Tamil Unicode, NO Tamil script characters ever).
 4. "visual_description" must be in English (used for image generation prompts).
 5. Keep language simple — target age 3–7 years.
-6. "speaker" must be one of: narrator, pandi, kitti, valli, children, elder
+6. "speaker" must be one of: narrator, kavin, kitti, valli, sparrows, elder
 7. "emotion" must be one of: excited, happy, sad, scared, gentle, whisper, angry, normal
 8. Use "narrator" if the character is not in the speaker list above.
 9. Each scene is exactly ONE moment: one action, one line, one emotion. Nothing more.
-10. Estimated clip duration is ~${clipDurationSeconds}s. Keep each text short enough to speak in that time.
+10. Each scene "text" must be 20–30 romanized words (not fewer, not more).
+
+CHARACTER RULES (CRITICAL):
+- Characters are ANIMALS ONLY — no humans, no children
+- Kavin = peacock (mayil). First mention: "Kavin, peacock," — curious, gentle, young male voice
+- Kitti = parrot (kili). First mention: "Kitti, kili," — chatty, fast talker
+- Valli = bulbul (kuruvi). First mention: "Valli, kuruvi," — gentle, soft female voice
+- Sparrows = small birds. Speaker key: "sparrows" — short bursts, high energy. NEVER refer to them as "children"
+- Introduce ALL characters (Kavin, Kitti, Valli, sparrows) in scenes 1–5
+
+LANGUAGE RULES (CRITICAL):
+- NEVER use ழ words: use rain (not mazhai), pretty/beautiful (not azhaga), road/way (not vazhi), veliye vanthaan (not ezhunthaan)
+- Use paarunga (not parunga), irukulla (not irukku illa?), mudiuma (not aaguma), penji ninnuchi (not mudinchitchu)
+- Colloquial contractions only — no formal grammar
+
+VISUAL DESCRIPTION RULES (CRITICAL):
+- Always name the exact animal species — never "character", "friend", or "children"
+  ✅ "a colorful peacock with spread fan tail feathers"
+  ✅ "a bright green parrot with expressive eyes"
+  ✅ "a small brown bulbul songbird"
+  ✅ "three tiny sparrows perched on a branch"
+  ❌ "Kavin and his friends" (too vague — generates humans)
+  ❌ "children watching" (generates human children)
+- Describe exact action, lighting, environment, and mood
+- All characters are ANIMALS — no humans ever
 
 STORY ARC (${targetClips} scenes total):
-- Intro (scenes 1–${introCount}): ${introCount} scenes — establish setting, introduce characters, gentle tone
-- Rising action (scenes ${introCount + 1}–${introCount + risingCount}): ${risingCount} scenes — build tension or adventure
-- Climax (scenes ${introCount + risingCount + 1}–${introCount + risingCount + climaxCount}): ${climaxCount} scenes — peak emotion or challenge
-- Resolution (scenes ${targetClips - resolutionCount + 1}–${targetClips}): ${resolutionCount} scenes — resolution and lesson
+- Intro (scenes 1–5): establish setting, introduce ALL characters, gentle tone
+- Rising action (scenes 6–14): build tension or adventure
+- Climax (scenes 15–20): peak emotion or challenge
+- Resolution (scenes 21–${targetClips}): resolution and lesson
 
 CHARACTER LIBRARY:
 ${characterJson}
@@ -92,8 +127,8 @@ Return ONLY this JSON structure:
       "scene_number": 1,
       "speaker": "narrator",
       "emotion": "gentle",
-      "text": "Tamil text here, max 25 words",
-      "visual_description": "English description of exact single visual moment to animate"
+      "text": "Romanized Tamil text, 20-30 words",
+      "visual_description": "English description of exact single visual moment — name animal species explicitly"
     }
   ]
 }`;
@@ -139,8 +174,9 @@ export async function runStage2(taskId, tracker, state = {}) {
 
   const episodeNumber = (episodeCount || 0) + 1;
 
-  // Load Tamil style guide before generation
+  // Load Tamil style guide and video feedback before generation
   const tamilStyleGuide = await getTamilStyleGuide();
+  const videoFeedback = await getVideoFeedback();
 
   // Generate and validate with up to 3 attempts
   // Also retries if Tamil Unicode characters are found in text fields
@@ -152,7 +188,7 @@ export async function runStage2(taskId, tracker, state = {}) {
     try {
       console.log(`  Generation attempt ${attempt}/3...`);
       const result = await withRetry(
-        () => generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide }),
+        () => generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback }),
         { maxRetries: 5, baseDelayMs: 15000, stage: 2, taskId }
       );
       validateScenes(result.scenes, targetClips);
@@ -213,16 +249,26 @@ export async function runStage2(taskId, tracker, state = {}) {
   console.log(`  Script posted to NEXUS for visibility (card: ${cardId})`);
   console.log(`✅ Stage 2 complete — ${scenes.length} scenes generated.`);
 
-  return { ...state, scenes, episodeNumber, youtube_seo };
+  // Build script object expected by stage-03 (metadata.characters) and stage-08 (youtube_seo)
+  const script = {
+    metadata: {
+      title: youtube_seo.title,
+      episode: episodeNumber,
+      characters: [...new Set(scenes.map(s => s.speaker).filter(s => s !== 'narrator'))],
+    },
+    youtube_seo,
+  };
+
+  return { ...state, scenes, episodeNumber, youtube_seo, script };
 }
 
-async function generateScript({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide }) {
+async function generateScript({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback }) {
   if (!process.env.ANTHROPIC_API_KEY) {
     console.warn('No ANTHROPIC_API_KEY — using sample scenes');
     return getSampleResult(concept, episodeNumber, targetClips);
   }
 
-  const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide });
+  const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback });
 
   const message = await callClaude({
     model: 'claude-sonnet-4-6',
@@ -265,8 +311,11 @@ function validateScenes(scenes, targetClips) {
 
     // Check word count (split on whitespace)
     const wordCount = scene.text.trim().split(/\s+/).length;
-    if (wordCount > 25) {
-      throw new Error(`Scene ${scene.scene_number} text too long (${wordCount} words, max 25)`);
+    if (wordCount < 15) {
+      throw new Error(`Scene ${scene.scene_number} text too short (${wordCount} words, min 15)`);
+    }
+    if (wordCount > 30) {
+      throw new Error(`Scene ${scene.scene_number} text too long (${wordCount} words, max 30)`);
     }
   }
 }
