@@ -1,15 +1,38 @@
 // stages/stage-02-script-gen.mjs — Claude generates flat scene array → NEXUS review
 import 'dotenv/config';
+import { readFile } from 'fs/promises';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { getSupabase } from '../lib/supabase.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { callClaude } from '../../shared/claude.mjs';
 import { getSetting } from '../lib/settings.mjs';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Load Tamil style guide at module init (non-blocking — awaited before first use)
+let _tamilStyleGuide = null;
+async function getTamilStyleGuide() {
+  if (_tamilStyleGuide) return _tamilStyleGuide;
+  try {
+    _tamilStyleGuide = await readFile(join(__dirname, '..', 'lib', 'tamil-style-guide.md'), 'utf8');
+  } catch {
+    console.warn('  ⚠️  tamil-style-guide.md not found — proceeding without it');
+    _tamilStyleGuide = '';
+  }
+  return _tamilStyleGuide;
+}
+
+/** Returns true if any Tamil Unicode characters (U+0B80–U+0BFF) are present. */
+function containsTamilUnicode(text) {
+  return /[\u0B80-\u0BFF]/.test(text || '');
+}
+
 const VALID_SPEAKERS = new Set(['narrator', 'pandi', 'kitti', 'valli', 'children', 'elder']);
 const VALID_EMOTIONS = new Set(['excited', 'happy', 'sad', 'scared', 'gentle', 'whisper', 'angry', 'normal']);
 
-function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds }) {
+function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide }) {
   const introCount     = Math.round(targetClips * 0.20);
   const risingCount    = Math.round(targetClips * 0.35);
   const climaxCount    = Math.round(targetClips * 0.25);
@@ -20,14 +43,18 @@ function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, cl
     null, 2
   );
 
-  return `You are a Tamil children's story scriptwriter for the YouTube channel @tinytamiltales.
+  const styleGuideSection = tamilStyleGuide
+    ? `\n\n---\nTAMIL STYLE GUIDE (HARD CONSTRAINTS — MUST FOLLOW):\n${tamilStyleGuide}\n\nCRITICAL LANGUAGE RULES (non-negotiable):\n- NEVER use Tamil Unicode script (அ ஆ இ etc.) — ALL text must be romanized English letters only\n- NEVER use ழ words: no mazhai/vazhi/azhaga/ezhil/ezhunthaan — use English equivalent (see style guide)\n- ALWAYS use colloquial contractions: irukulla not irukku illa\n- NEVER use literary story openings — start warm and direct\n- First mention of each character: Paandi=Paandi mayil, Kitti=Kitti kili, Valli=Valli kuruvi\n- Use penji ninnuchi not mudinchitchu\n---`
+    : '';
+
+  return `You are a Tamil children's story scriptwriter for the YouTube channel @tinytamiltales.${styleGuideSection}
 
 TASK: Generate exactly ${targetClips} scenes for a Tamil kids story. Each scene is ONE visual moment.
 
 RULES:
 1. Return ONLY a valid JSON object. No markdown. No explanation. No wrapping.
 2. The "scenes" array must contain EXACTLY ${targetClips} objects — no more, no fewer.
-3. Each scene "text" must be in Tamil script, ≤ 25 words.
+3. Each scene "text" must be in ROMANIZED Tamil (English letters only — NO Tamil Unicode, NO Tamil script characters).
 4. "visual_description" must be in English (used for image generation prompts).
 5. Keep language simple — target age 3–7 years.
 6. "speaker" must be one of: narrator, pandi, kitti, valli, children, elder
@@ -112,7 +139,11 @@ export async function runStage2(taskId, tracker, state = {}) {
 
   const episodeNumber = (episodeCount || 0) + 1;
 
+  // Load Tamil style guide before generation
+  const tamilStyleGuide = await getTamilStyleGuide();
+
   // Generate and validate with up to 3 attempts
+  // Also retries if Tamil Unicode characters are found in text fields
   let scenes;
   let youtube_seo;
   let lastError;
@@ -121,10 +152,17 @@ export async function runStage2(taskId, tracker, state = {}) {
     try {
       console.log(`  Generation attempt ${attempt}/3...`);
       const result = await withRetry(
-        () => generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds }),
+        () => generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide }),
         { maxRetries: 5, baseDelayMs: 15000, stage: 2, taskId }
       );
       validateScenes(result.scenes, targetClips);
+
+      // Reject if any Tamil Unicode slipped through
+      const unicodeViolation = result.scenes.find(s => containsTamilUnicode(s.text));
+      if (unicodeViolation) {
+        throw new Error(`Tamil Unicode found in scene ${unicodeViolation.scene_number} text — must be romanized only`);
+      }
+
       scenes = result.scenes;
       youtube_seo = result.youtube_seo;
       break;
@@ -178,13 +216,13 @@ export async function runStage2(taskId, tracker, state = {}) {
   return { ...state, scenes, episodeNumber, youtube_seo };
 }
 
-async function generateScript({ concept, characters, episodeNumber, targetClips, clipDurationSeconds }) {
+async function generateScript({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide }) {
   if (!process.env.ANTHROPIC_API_KEY) {
     console.warn('No ANTHROPIC_API_KEY — using sample scenes');
     return getSampleResult(concept, episodeNumber, targetClips);
   }
 
-  const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds });
+  const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide });
 
   const message = await callClaude({
     model: 'claude-sonnet-4-6',
