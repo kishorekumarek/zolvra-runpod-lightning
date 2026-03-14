@@ -22,8 +22,24 @@ const MAX_SCENE_FAILURES = 5;
 export async function runStage4(taskId, tracker, state = {}) {
   console.log('🎨 Stage 4: Scene illustration...');
 
-  const { script, characterMap, parentCardId } = state;
-  if (!script) throw new Error('Stage 4: script not found in pipeline state');
+  let { script, characterMap, parentCardId } = state;
+
+  if (!script) {
+    // Fallback: load script from the most recent stage-2 run for this task
+    console.log('  ℹ️  script not in current state, loading from stage 2...');
+    const sb2 = getSupabase();
+    const { data: stage2Row } = await sb2
+      .from('video_pipeline_runs')
+      .select('pipeline_state')
+      .eq('task_id', taskId)
+      .eq('stage', 2)
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .single();
+    script = stage2Row?.pipeline_state?.script;
+  }
+
+  if (!script) throw new Error('Stage 4: script not found in pipeline state or stage 2 history');
   if (!characterMap) throw new Error('Stage 4: characterMap not found in pipeline state');
 
   const sb = getSupabase();
@@ -108,7 +124,7 @@ async function illustrateScene({ taskId, scene, characterMap, tmpDir, tracker })
   console.log(`  Generating image for scene ${scene.scene_number}...`);
 
   const imageBuffer = await withRetry(
-    () => generateSceneImage({ prompt }),
+    () => generateSceneImage({ prompt, sceneNumber: scene.scene_number }),
     { maxRetries: 3, baseDelayMs: 15000, stage: STAGE, taskId }
   );
 
