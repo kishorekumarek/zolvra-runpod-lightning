@@ -28,16 +28,16 @@ const TEST_SCENES = [
     speaker: 'narrator',
     emotion: 'gentle',
     environment: 'forest_rain',
-    text: 'Oru naal, kaatula rain penjitu ninnuchi. Paandi mayil veliye vanthaan, sky-la paathaan. Anniki romba pretty-a irunthuchi — oru big rainbow colour colour-a thonachu!',
-    visual_description: 'Paandi the peacock stepping out from under a tree after rain, looking up at a colorful rainbow in a lush green forest, water droplets on leaves',
+    text: 'Oru naal, kaatula rain penjitu ninnuchi. Kavin mayil veliye vanthaan, sky-la paathaan. Anniki romba pretty-a irunthuchi — oru big rainbow colour colour-a thonachu!',
+    visual_description: 'Kavin the peacock stepping out from under a tree after rain, looking up at a colorful rainbow in a lush green forest, water droplets on leaves',
   },
   {
     scene_number: 2,
-    speaker: 'paandi',
+    speaker: 'kavin',
     emotion: 'excited',
     environment: 'forest_rain',
     text: 'Ayyo, paarunga paarunga! Sky-la rainbow irukku! Romba beautiful-a irukku! Naan indha rainbow-va touch pannanum, aaguma? Dei Kitti, nee paathiya? Super-a iruku-la?',
-    visual_description: 'Paandi pointing excitedly at a rainbow with wings spread wide, calling to his friend Kitti the parrot, eyes bright with joy',
+    visual_description: 'Kavin pointing excitedly at a rainbow with wings spread wide, calling to his friend Kitti the parrot, eyes bright with joy',
   },
 ];
 

@@ -58,7 +58,7 @@ Avoid formal once-upon-a-time phrases. Start warm and direct.
 | ❌ Avoid                        | ✅ Use instead                                      |
 |--------------------------------|-----------------------------------------------------|
 | Oru mazhai naal...             | Oru naal, kaatula rain penjitu irunthuchi...        |
-| Oru siru paravai irunthatu... | Paandi oru naal kaatula thirinju irunthaan...       |
+| Oru siru paravai irunthatu... | Kavin oru naal kaatula thirinju irunthaan...       |
 | Kadalorattil oru...            | Sea-kittE oru...                                    |
 
 ---
@@ -66,10 +66,10 @@ Avoid formal once-upon-a-time phrases. Start warm and direct.
 ## Rule 5 — Each Character Has a Distinct Voice Pattern
 
 **Narrator** — warm, slightly poetic, colloquial Tamil with English nouns
-> "Paandi kaatula thannoda friends-oda enjoy pannitu irunthaan.
+> "Kavin kaatula thannoda friends-oda enjoy pannitu irunthaan.
 >  Anniki sky-la oru big rainbow vandhuchu — romba pretty-a!"
 
-**Paandi (curious, gentle, young male)** — Tanglish, enthusiastic but sweet
+**Kavin (curious, gentle, young male)** — Tanglish, enthusiastic but sweet
 > "Ayyo, parunga! Sky paarunga — rainbow irukku! Super-a irukulla?"
 > "Naan indha rainbow-a touch pannanum, aaguma?"
 
@@ -78,11 +78,11 @@ Avoid formal once-upon-a-time phrases. Start warm and direct.
 > "Enna colour enna colour! Yaaru pottaanga theriyuma?"
 
 **Valli (bulbul, gentle, soft female)** — slower pace, soft Tamil, caring
-> "Paandi, nee vera level-a irukkiye da... always happy-a irukkiye."
+> "Kavin, nee vera level-a irukkiye da... always happy-a irukkiye."
 > "Romba pretty-a irukku... naan indha colours ellam paakanum-nu nenachen."
 
 **Children** — short bursts, high energy, pure Tanglish
-> "Wowww! Paandi uncle rainbow catch pannuvaaru! Parunga parunga!"
+> "Wowww! Kavin uncle rainbow catch pannuvaaru! Parunga parunga!"
 > "Naamum venom! Naamum venom!"
 
 ---
@@ -93,7 +93,7 @@ Kids may not know who's who from the name alone.
 
 | Character | First mention |
 |-----------|--------------|
-| Paandi    | Paandi mayil (peacock) |
+| Kavin    | Kavin, peacock, |
 | Kitti     | Kitti kili (parrot) |
 | Valli     | Valli kuruvi (bulbul) |
 
@@ -131,13 +131,13 @@ ElevenLabs reads punctuation as emotional cues. Use it.
 
 ## 10 Reference Lines (approved style — use as few-shot examples in prompt)
 
-1. (narrator, gentle) "Oru naal, Paandi kaatula thannoda friends-oda play pannitu irunthaan."
+1. (narrator, gentle) "Oru naal, Kavin kaatula thannoda friends-oda play pannitu irunthaan."
 2. (narrator, warm) "Anniki sky-la oru big rainbow vandhuchu — romba pretty-a irunthuchi!"
-3. (paandi, excited) "Ayyo! Parunga parunga! Rainbow irukku! Super-a irukulla?"
-4. (paandi, wonder) "Naan indha rainbow-a touch pannanum... aaguma?"
+3. (kavin, excited) "Ayyo! Parunga parunga! Rainbow irukku! Super-a irukulla?"
+4. (kavin, wonder) "Naan indha rainbow-a touch pannanum... aaguma?"
 5. (kitti, chatty) "Aama aama! Naan paathene! Blue, red, yellow — ellame irukku!"
 6. (kitti, fast) "Enna colour enna colour! Yaaru pottaanga theriyuma theriyuma?"
-7. (valli, gentle) "Paandi... romba pretty-a irukku. Naan indha colours paakanum-nu nenachen."
+7. (valli, gentle) "Kavin... romba pretty-a irukku. Naan indha colours paakanum-nu nenachen."
 8. (valli, soft) "Nee vera level-a irukkiye da. Always happy-a irukkiye."
-9. (children, burst) "Wowww! Paandi uncle rainbow catch pannuvaaru! Parunga!"
-10. (narrator, close) "Annaiku Paandi thannoda friends-oda serthu oru super day enjoy pannaan."
+9. (children, burst) "Wowww! Kavin uncle rainbow catch pannuvaaru! Parunga!"
+10. (narrator, close) "Annaiku Kavin thannoda friends-oda serthu oru super day enjoy pannaan."
