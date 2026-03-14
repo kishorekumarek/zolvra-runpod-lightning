@@ -8,12 +8,19 @@ import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
 import { submitKlingJob, pollKlingJob, downloadKlingVideo } from '../lib/kling.mjs';
 import { getKlingParams } from '../lib/motion-params.mjs';
-import { uploadSceneAnimation, getSignedUrl, BUCKETS } from '../lib/storage.mjs';
+import { uploadSceneAnimation, uploadSceneImage, getSignedUrl, BUCKETS } from '../lib/storage.mjs';
+import { generateSceneImage, buildScenePrompt } from '../lib/image-gen.mjs';
+import { stillImageToVideo } from '../lib/ffmpeg.mjs';
 import { withRetry } from '../lib/retry.mjs';
-import { calcAnimationCost } from '../lib/cost-tracker.mjs';
+import { calcAnimationCost, calcImageCost } from '../lib/cost-tracker.mjs';
 
 const STAGE = 5;
-const MAX_SCENE_FAILURES = 2;
+const NSFW_HALT_RATIO = 0.8; // halt pipeline if >80% of scenes fail
+
+/** Returns true if the error is a Hailuo NSFW rejection (HTTP/API code 422). */
+function isNsfwError(err) {
+  return /422/.test(err?.message);
+}
 
 /**
  * Stage 5: Animate each scene with Kling image-to-video.
@@ -21,7 +28,7 @@ const MAX_SCENE_FAILURES = 2;
 export async function runStage5(taskId, tracker, state = {}) {
   console.log('🎬 Stage 5: Scene animation...');
 
-  const { script, sceneImagePaths, parentCardId, tmpDir } = state;
+  const { script, sceneImagePaths, characterMap, parentCardId, tmpDir } = state;
   if (!script) throw new Error('Stage 5: script not found');
   if (!sceneImagePaths) throw new Error('Stage 5: sceneImagePaths not found');
 
@@ -39,7 +46,7 @@ export async function runStage5(taskId, tracker, state = {}) {
         taskId, scene,
         imagePath: sceneImagePaths[scene.scene_number]?.imagePath,
         storagePath: sceneImagePaths[scene.scene_number]?.storagePath,
-        tmpDir, tracker
+        characterMap, tmpDir, tracker
       }))
     );
     results.push(...batchResults.map((r, idx) => ({ ...r, scene: batch[idx] })));
@@ -52,9 +59,9 @@ export async function runStage5(taskId, tracker, state = {}) {
 
   const failed = results.filter(r => r.status === 'rejected');
 
-  if (failed.length > MAX_SCENE_FAILURES) {
+  if (scenes.length > 0 && failed.length / scenes.length > NSFW_HALT_RATIO) {
     throw new Error(
-      `Too many animation failures (${failed.length}/${scenes.length}). ` +
+      `Too many animation failures (${failed.length}/${scenes.length}, ${Math.round(failed.length / scenes.length * 100)}%). ` +
       `Errors: ${failed.map(f => f.reason?.message).join('; ')}`
     );
   }
@@ -90,29 +97,49 @@ export async function runStage5(taskId, tracker, state = {}) {
   return { ...state, sceneAnimPaths };
 }
 
-async function animateScene({ taskId, scene, imagePath, storagePath, tmpDir, tracker }) {
+async function animateScene({ taskId, scene, imagePath, storagePath, characterMap, tmpDir, tracker }) {
   if (!storagePath) throw new Error(`No storage path for scene ${scene.scene_number}`);
-
-  // Get signed URL for Kling (needs public-accessible URL)
-  let imageUrl;
-  try {
-    imageUrl = await getSignedUrl({ bucket: BUCKETS.scenes, path: storagePath, expiresInSeconds: 3600 });
-  } catch (err) {
-    throw new Error(`Could not get signed URL for scene ${scene.scene_number}: ${err.message}`);
-  }
 
   const motionParams = await getKlingParams(scene.motion_type || 'dialogue');
   const prompt = `${scene.visual_description} — ${motionParams.prompt_suffix}, gentle children's animation style`;
 
-  console.log(`  Submitting Kling job for scene ${scene.scene_number} (${scene.motion_type})...`);
+  console.log(`  Submitting Hailuo job for scene ${scene.scene_number} (${scene.motion_type})...`);
 
-  const taskIdKling = await withRetry(
-    () => submitKlingJob({ imageUrl, prompt, motionParams }),
-    { maxRetries: 3, baseDelayMs: 30000, stage: STAGE, taskId }
-  );
+  let currentImagePath = imagePath;
+  let currentStoragePath = storagePath;
+  let klingTaskId;
+
+  // Attempt 1 — original image
+  try {
+    const imageUrl = await resolveSignedUrl(currentStoragePath, scene.scene_number);
+    klingTaskId = await withRetry(
+      () => submitKlingJob({ imageUrl, prompt, motionParams }),
+      { maxRetries: 3, baseDelayMs: 30000, stage: STAGE, taskId }
+    );
+  } catch (err) {
+    if (!isNsfwError(err)) throw err;
+
+    console.warn(`  ⚠️  Scene ${scene.scene_number} NSFW rejected (attempt 1). Regenerating with extra-safe prompt...`);
+    ({ imagePath: currentImagePath, storagePath: currentStoragePath } =
+      await regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracker }));
+
+    // Attempt 2 — extra-safe regenerated image
+    try {
+      const imageUrl = await resolveSignedUrl(currentStoragePath, scene.scene_number);
+      klingTaskId = await withRetry(
+        () => submitKlingJob({ imageUrl, prompt, motionParams }),
+        { maxRetries: 3, baseDelayMs: 30000, stage: STAGE, taskId }
+      );
+    } catch (err2) {
+      if (!isNsfwError(err2)) throw err2;
+
+      console.warn(`  ⚠️  Scene ${scene.scene_number} NSFW rejected (attempt 2). Using static image fallback.`);
+      return staticImageFallback({ taskId, scene, imagePath: currentImagePath, storagePath: currentStoragePath, tmpDir, tracker });
+    }
+  }
 
   const videoUrl = await withRetry(
-    () => pollKlingJob(taskIdKling, 300000),
+    () => pollKlingJob(klingTaskId, 300000),
     { maxRetries: 2, baseDelayMs: 10000, stage: STAGE, taskId }
   );
 
@@ -144,6 +171,69 @@ async function animateScene({ taskId, scene, imagePath, storagePath, tmpDir, tra
   tracker.addCost(STAGE, cost);
 
   console.log(`  ✓ Scene ${scene.scene_number} animated ($${cost.toFixed(4)})`);
+  return { scene, animPath, storagePath: animStoragePath };
+}
+
+async function resolveSignedUrl(storagePath, sceneNumber) {
+  try {
+    return await getSignedUrl({ bucket: BUCKETS.scenes, path: storagePath, expiresInSeconds: 3600 });
+  } catch (err) {
+    throw new Error(`Could not get signed URL for scene ${sceneNumber}: ${err.message}`);
+  }
+}
+
+/** Re-generate scene image with an extra-safe prompt to avoid NSFW rejection. */
+async function regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracker }) {
+  const speakerNames = [...new Set((scene.lines || []).map(l => l.speaker))];
+  const primarySpeaker = speakerNames.find(n => n !== 'NARRATOR') || 'NARRATOR';
+  const character = characterMap?.[primarySpeaker] || characterMap?.['NARRATOR'];
+
+  const extraSuffix = 'minimal characters, simple background, no physical contact between characters, wide shot, child-friendly';
+  const prompt = buildScenePrompt(scene, character, extraSuffix);
+
+  console.log(`  Regenerating image for scene ${scene.scene_number} with extra-safe prompt...`);
+  const imageBuffer = await withRetry(
+    () => generateSceneImage({ prompt }),
+    { maxRetries: 3, baseDelayMs: 15000, stage: STAGE, taskId }
+  );
+
+  const sceneDir = join(tmpDir, 'scenes', `scene_${String(scene.scene_number).padStart(2, '0')}`);
+  await fs.mkdir(sceneDir, { recursive: true });
+  const imagePath = join(sceneDir, 'image_safe.png');
+  await fs.writeFile(imagePath, imageBuffer);
+
+  const storagePath = await uploadSceneImage({
+    videoId: taskId,
+    sceneNumber: scene.scene_number,
+    buffer: imageBuffer,
+  });
+
+  tracker.addCost(STAGE, calcImageCost(1, 'fast'));
+  return { imagePath, storagePath };
+}
+
+/** Create a freeze-frame 10s video from a still image as last-resort fallback. */
+async function staticImageFallback({ taskId, scene, imagePath, storagePath, tmpDir, tracker }) {
+  const sceneDir = join(tmpDir, 'scenes', `scene_${String(scene.scene_number).padStart(2, '0')}`);
+  await fs.mkdir(sceneDir, { recursive: true });
+  const animPath = join(sceneDir, 'animation.mp4');
+
+  await stillImageToVideo({ imagePath, duration: 10, outputPath: animPath });
+
+  const videoBuffer = await fs.readFile(animPath);
+  const animStoragePath = await uploadSceneAnimation({
+    videoId: taskId,
+    sceneNumber: scene.scene_number,
+    buffer: videoBuffer,
+  });
+
+  const sb = getSupabase();
+  await sb.from('scene_assets')
+    .update({ animation_url: animStoragePath })
+    .eq('video_id', taskId)
+    .eq('scene_number', scene.scene_number);
+
+  console.log(`  ✓ Scene ${scene.scene_number} using static fallback (freeze frame, 10s)`);
   return { scene, animPath, storagePath: animStoragePath };
 }
 
