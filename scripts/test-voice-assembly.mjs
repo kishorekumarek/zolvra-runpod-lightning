@@ -19,7 +19,7 @@ const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_R
 const ELEVENLABS_BASE = 'https://api.us.elevenlabs.io/v1';
 const TASK_ID = 'a0eb49a6-f2ca-4427-8864-b3a0c95ec5c9';
 const TMP = '/tmp/zolvra-test-2clip-v2';
-const OUT = join(__dirname, '..', 'output', 'test-2clip-v4.mp4');
+const OUT = join(__dirname, '..', 'output', 'test-2clip-v5.mp4');
 const FFMPEG = process.env.FFMPEG_PATH || '/opt/homebrew/bin/ffmpeg';
 
 const TEST_SCENES = [
