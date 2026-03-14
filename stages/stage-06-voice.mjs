@@ -33,7 +33,7 @@ async function callElevenLabs({ text, voiceId, voiceSettings }) {
         text,
         model_id: 'eleven_multilingual_v2',
         language_code: 'ta',
-        voice_settings: voiceSettings,
+        voice_settings: { ...voiceSettings, speed: 0.92 },
         output_format: 'mp3_44100_128',
       }),
     }
