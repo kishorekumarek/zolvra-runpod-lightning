@@ -129,15 +129,90 @@ ElevenLabs reads punctuation as emotional cues. Use it.
 
 ---
 
-## 10 Reference Lines (approved style — use as few-shot examples in prompt)
+---
 
-1. (narrator, gentle) "Oru naal, Kavin kaatula thannoda friends-oda play pannitu irunthaan."
-2. (narrator, warm) "Anniki sky-la oru big rainbow vandhuchu — romba pretty-a irunthuchi!"
-3. (kavin, excited) "Ayyo! Parunga parunga! Rainbow irukku! Super-a irukulla?"
-4. (kavin, wonder) "Naan indha rainbow-a touch pannanum... aaguma?"
-5. (kitti, chatty) "Aama aama! Naan paathene! Blue, red, yellow — ellame irukku!"
-6. (kitti, fast) "Enna colour enna colour! Yaaru pottaanga theriyuma theriyuma?"
-7. (valli, gentle) "Kavin... romba pretty-a irukku. Naan indha colours paakanum-nu nenachen."
-8. (valli, soft) "Nee vera level-a irukkiye da. Always happy-a irukkiye."
-9. (children, burst) "Wowww! Kavin uncle rainbow catch pannuvaaru! Parunga!"
-10. (narrator, close) "Annaiku Kavin thannoda friends-oda serthu oru super day enjoy pannaan."
+## Rule 11 — "sernthu" not "serthu" (ALWAYS)
+The correct romanization for "together/joined" is **sernthu**, not serthu.
+❌ serthu → ✅ sernthu
+This applies everywhere: "sernthu pogalaam", "sernthu irunthom", "sernthu vaa", etc.
+
+---
+
+## Rule 12 — "Naamum/Naamellam" vs "Naangalum/Naangalam" (inclusive vs exclusive WE)
+Tamil has two words for "we" — use the right one based on who's speaking.
+
+- **Naamellam / namba** — inclusive "we" (speaker + listener are BOTH included)
+  → Use when Kavin says "let's all go together" (he includes everyone listening)
+- **Naangalum / naangalam** — exclusive "we" (our group, separate from you)
+  → Use when sparrows speak among themselves or refer to their group joining
+
+❌ Sparrows: "Naamum varom!" → ✅ "Naangalum varom!"
+✅ Kavin: "Naamellam sernthu pogalaam!" (he's including everyone)
+✅ Kavin: "namba ellam sernthu irundhome" (warm, intimate inclusive)
+
+---
+
+## Rule 13 — Use Tamil Words for Body Parts and Directions. Not English.
+
+| ❌ English/hybrid         | ✅ Tamil                   |
+|--------------------------|---------------------------|
+| Legs romba hurt-aaguthu  | Kaal romba Valikuthu      |
+| below-ku paathaanga      | keela paathaanga          |
+| side-la irukken          | pakkathu-la irukken       |
+
+---
+
+## Rule 14 — Use Tamil Number Words Where Natural
+When a number is descriptive/narrative (not counting), use Tamil:
+- "three small sparrows" → "moonu chinna kuruvi-nga"
+- Counting out loud (one two three, let's go!) → keep English numbers for energy
+
+---
+
+## Rule 15 — Use Specific Tamil Action Verbs for Visual Moments
+More vivid and natural than generic motion verbs:
+- "jumped down" → "kudhichu keela vanthaanga" (not "jump pannittu below-ku vanthaanga")
+- "give up" → "give up pannama" (Tanglish OK here — diaspora kids understand it)
+- "ended/stopped" → "penji ninnuchi" (natural, approved)
+
+---
+
+## Rule 16 — "vaanathula" for sky in narrative/wonder contexts
+When describing the sky in a visual/wonder context, "vaanathula" feels more Tamil and natural.
+"Sky-la" is fine for casual speech but "vaanathula" lands better for awe moments.
+- ❌ "Sky-la oru rainbow irukku!" (character's excited speech — Sky-la OK)
+- ✅ "vaanathula oru peria rainbow irukku!" (adds warmth/wonder)
+
+---
+
+## Rule 17 — Emotional Emphasis Patterns (Darl-approved)
+These are natural emphasis patterns used in real Tamil speech:
+
+- **Extended vowels for excitement:** "super-aaaaaa!", "wowwwww!", "polammmm!"
+- **"Aanaa" with extra 'a'** for contrast/drama: "Aanaa Kavin, naan tired-aa irukken..."
+- **"-vey" suffix for emotional punch:** "Friends-dhan real rainbow-vey!" (definitive statement)
+- **"-dhan" for strong affirmation:** "Friends-dhan real rainbow!" (not just "Friends-ae")
+- **"enkuda"** for personal "with me" — warmer than "side-la": "neenga enkuda iruntheenga"
+- **"onnaa polam"** for "go together as one" — closer/warmer than "serthu pogalaam"
+- **"adhukulla"** for "by then/before that": "Rainbow adhukulla poayidum-la?" (not "vandhu poayidum-la")
+
+---
+
+## Rule 18 — "pograthuku way theriyuma" not "road theriyuma"
+For "do you know the way", use "pograthuku way theriyuma" — more natural Tanglish.
+"road theriyuma" sounds like asking for a specific road name.
+
+---
+
+## Reference Lines (Darl-approved from Ep 01 corrections — use as few-shot examples)
+
+1. (narrator, gentle) "Oru naal, oru peria kaatula, Kavin, peacock, thannoda friends-oda sernthu happy-a time spend pannitu irunthaan."
+2. (narrator, happy) "Appo, moonu chinna kuruvi-nga marathu mela irunthu, Kavin-oda plan ketu. kudhichu keela vanthaanga — naangalum varom-nu sonaanga!"
+3. (kavin, excited) "Ayyo! Paarunga paarunga! vaanathula oru peria rainbow irukku! Super-a irukulla?"
+4. (kavin, happy) "Seri seri! Naamellam sernthu pogalaam! Rainbow enga mudiyuthu-nu kaatula poyi paakkalaam — ready-aa? one two three — let's go!"
+5. (kitti, excited) "Apo, Aama aama! Enakum theriyuthe wowwwww! ellame super-ah irukku! enakum adhu kitta poganum? Vanga polammmm!"
+6. (kitti, scared) "Ayyo ayyo! Indha river romba fast-a irukku! Kitta poga-ve bayama irukku! Enna pannalaam? Kavin, nee enna solra, ethavadhu idea iruka?"
+7. (valli, gentle) "Kitti, kavalai padaatha. Naamellam sernthu ponaa tiredness theriyaathu. Paaru, naan unkooda pakkathu-la irukken. Sernthu pogalaam, okay-va?"
+8. (sparrows, excited) "Naangalum varom! naangalum varom! Rainbow paakanum! Kavin anna, unaku pograthuku way theriyuma? ellarum sernthu pogalaam!"
+9. (sparrows, happy) "Naangalum help pannurom! Kitti anna, nee slow-a vaa, naangalam wait pannurom! Sernthu onnaa polam onnaa polaam!"
+10. (kitti, happy) "Aama aama! Naan tired-aa irunthen, aana neenga ellam enkuda iruntheenga-la — adhu thaan best-aa irunthuchi! Friends-dhan real rainbow-vey!"

@@ -36,6 +36,7 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
     // input 2: SFX (stream_loop -1)
     // input 3: BGM (stream_loop -1, seek to bgmOffset)
     const fc = [
+      `[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720[vout]`,
       `[1:a]volume=1.0[voice]`,
       `[2:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.3[sfx]`,
       `[3:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.12[bgm]`,
@@ -49,8 +50,8 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
       `-stream_loop -1 -i "${sfxPath}"`,
       `-ss ${bgmOffset.toFixed(3)} -stream_loop -1 -i "${bgmPath}"`,
       `-t ${sceneDur}`,
-      `-map 0:v`,
       `-filter_complex "${fc}"`,
+      `-map "[vout]"`,
       `-map "[aout]"`,
       `-c:v libx264 -preset fast -crf 22`,
       `-c:a aac -b:a 192k`,
@@ -65,6 +66,7 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
       `-i "${audioPath}"`,
       `-t ${sceneDur}`,
       `-map 0:v -map 1:a`,
+      `-vf "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720"`,
       `-c:v libx264 -preset fast -crf 22`,
       `-c:a aac -b:a 192k`,
       `"${outputPath}"`,
@@ -177,15 +179,10 @@ export async function runStage7(taskId, tracker, state = {}) {
     throw new Error('No scenes were assembled — cannot create final video');
   }
 
-  // Concatenate all scene finals into one video
-  console.log(`  📼 Concatenating ${sceneFinalPaths.length} scenes...`);
+  // Concatenate all scene finals — plain concat (no transitions)
+  console.log(`  📼 Concat ${sceneFinalPaths.length} scenes (plain)...`);
   const concatPath = join(assemblyDir, 'concat.mp4');
-
-  await assembleVideo({
-    sceneCombinedPaths: sceneFinalPaths,
-    musicPath: null,
-    outputPath: concatPath,
-  });
+  await assembleVideo({ sceneCombinedPaths: sceneFinalPaths, outputPath: concatPath });
 
   // Apply continuous BGM overlay (vol 0.1, fade in 2s, fade out 3s)
   const finalPath = join(assemblyDir, 'final.mp4');
