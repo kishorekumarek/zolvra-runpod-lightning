@@ -216,6 +216,16 @@ export async function runStage2(taskId, tracker, state = {}) {
 
   if (!scenes) throw new Error(`Script generation failed after 3 attempts: ${lastError?.message}`);
 
+  // Validate no placeholder text slipped through
+  const FORBIDDEN_PLACEHOLDERS = ['same locked description', 'same description', '[locked description]', 'INSERT CHARACTER'];
+  for (const scene of scenes) {
+    for (const placeholder of FORBIDDEN_PLACEHOLDERS) {
+      if (scene.visual_description?.toLowerCase().includes(placeholder.toLowerCase())) {
+        throw new Error(`Scene ${scene.scene_number} visual_description contains placeholder text: "${placeholder}". Fix the script generation prompt.`);
+      }
+    }
+  }
+
   // Auto-fill youtube_seo if Claude omitted it
   if (!youtube_seo) {
     youtube_seo = {

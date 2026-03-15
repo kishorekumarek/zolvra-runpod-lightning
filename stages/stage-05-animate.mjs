@@ -1,4 +1,4 @@
-// stages/stage-05-animate.mjs — Kling image-to-video per scene
+// stages/stage-05-animate.mjs — Wan 2.6 image-to-video per scene
 // Auto-stage — checks isFeedbackCollectionMode()
 import 'dotenv/config';
 import { promises as fs } from 'fs';
@@ -6,9 +6,8 @@ import { join } from 'path';
 import { getSupabase } from '../lib/supabase.mjs';
 import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
-import { submitKlingJob, pollKlingJob, downloadKlingVideo } from '../lib/kling.mjs';
-import { getKlingParams } from '../lib/motion-params.mjs';
-import { uploadSceneAnimation, uploadSceneImage, getSignedUrl, BUCKETS } from '../lib/storage.mjs';
+import { submitWanJob, pollWanJob, downloadWanVideo } from '../lib/wan.mjs';
+import { uploadSceneAnimation, uploadSceneImage, getSignedUrl, downloadFromStorage, BUCKETS } from '../lib/storage.mjs';
 import { generateSceneImage, buildScenePrompt } from '../lib/image-gen.mjs';
 import { stillImageToVideo } from '../lib/ffmpeg.mjs';
 import { withRetry } from '../lib/retry.mjs';
@@ -16,17 +15,28 @@ import { calcAnimationCost, calcImageCost } from '../lib/cost-tracker.mjs';
 
 const STAGE = 5;
 const NSFW_HALT_RATIO = 0.8; // halt pipeline if >80% of scenes fail
+const WAN_INTER_JOB_DELAY_MS = 10000; // 10s delay between Wan jobs
 
-/** Returns true if the error is a Hailuo NSFW rejection (HTTP/API code 422). */
-function isNsfwError(err) {
-  return /422/.test(err?.message);
+/**
+ * Build a concise animation prompt from scene data (max ~300 chars).
+ * "Scene setting. Character name + key visual. Gentle movement, warm lighting, Pixar animation style, child-friendly Tamil village scene."
+ */
+function buildWanPrompt(scene) {
+  const setting   = scene.environment || 'Tamil village';
+  const speaker   = scene.speaker   || 'characters';
+  const emotion   = scene.emotion   || 'happy';
+  const descSnip  = (scene.visual_description || '').slice(0, 150).replace(/\n/g, ' ').trim();
+
+  const prompt = `${setting} scene, ${emotion} mood. ${speaker}: ${descSnip}. Gentle movement, warm lighting, Pixar animation style, child-friendly Tamil village scene.`;
+  // Clamp to 300 chars
+  return prompt.slice(0, 300);
 }
 
 /**
- * Stage 5: Animate each scene with Kling image-to-video.
+ * Stage 5: Animate each scene with Wan 2.6 image-to-video (one by one, 10s delay between jobs).
  */
 export async function runStage5(taskId, tracker, state = {}) {
-  console.log('🎬 Stage 5: Scene animation...');
+  console.log('🎬 Stage 5: Scene animation (Wan 2.6)...');
 
   const { scenes, sceneImagePaths, characterMap, parentCardId, tmpDir } = state;
   if (!scenes) throw new Error('Stage 5: scenes not found');
@@ -35,24 +45,26 @@ export async function runStage5(taskId, tracker, state = {}) {
   const sb = getSupabase();
   const sceneAnimPaths = {};
 
-  // Process scenes in batches of 3 (avoid Kling rate limits)
+  // Process scenes ONE BY ONE to avoid Wan rate limits
   const validScenes = scenes.filter(s => sceneImagePaths[s.scene_number]);
   const results = [];
 
-  for (let i = 0; i < validScenes.length; i += 3) {
-    const batch = validScenes.slice(i, i + 3);
-    const batchResults = await Promise.allSettled(
-      batch.map(scene => animateScene({
+  for (let i = 0; i < validScenes.length; i++) {
+    const scene = validScenes[i];
+    const result = await Promise.allSettled([
+      animateScene({
         taskId, scene,
         imagePath: sceneImagePaths[scene.scene_number]?.imagePath,
         storagePath: sceneImagePaths[scene.scene_number]?.storagePath,
         characterMap, tmpDir, tracker
-      }))
-    );
-    results.push(...batchResults.map((r, idx) => ({ ...r, scene: batch[idx] })));
+      })
+    ]);
+    results.push({ ...result[0], scene });
 
-    if (i + 3 < validScenes.length) {
-      await new Promise(r => setTimeout(r, 5000));
+    // 10s delay between jobs (except after last)
+    if (i < validScenes.length - 1) {
+      console.log(`  ⏳ Waiting ${WAN_INTER_JOB_DELAY_MS / 1000}s before next Wan job...`);
+      await new Promise(r => setTimeout(r, WAN_INTER_JOB_DELAY_MS));
     }
   }
 
@@ -99,52 +111,27 @@ export async function runStage5(taskId, tracker, state = {}) {
 async function animateScene({ taskId, scene, imagePath, storagePath, characterMap, tmpDir, tracker }) {
   if (!storagePath) throw new Error(`No storage path for scene ${scene.scene_number}`);
 
-  // New flat scene format has no motion_type — default to 'dialogue'
-  const motionType = scene.motion_type || 'dialogue';
-  const motionParams = await getKlingParams(motionType);
-  const prompt = `${scene.visual_description} — ${motionParams.prompt_suffix}, gentle children's animation style`;
-
-  console.log(`  Submitting Hailuo job for scene ${scene.scene_number}...`);
+  // Build concise Wan prompt (max 300 chars)
+  const prompt = buildWanPrompt(scene);
+  console.log(`  Submitting Wan 2.6 job for scene ${scene.scene_number}...`);
+  console.log(`  Prompt: ${prompt}`);
 
   let currentImagePath = imagePath;
   let currentStoragePath = storagePath;
-  let klingTaskId;
 
-  // Attempt 1 — original image
-  try {
-    const imageUrl = await resolveSignedUrl(currentStoragePath, scene.scene_number);
-    klingTaskId = await withRetry(
-      () => submitKlingJob({ imageUrl, prompt, motionParams }),
-      { maxRetries: 3, baseDelayMs: 30000, stage: STAGE, taskId }
-    );
-  } catch (err) {
-    if (!isNsfwError(err)) throw err;
-
-    console.warn(`  ⚠️  Scene ${scene.scene_number} NSFW rejected (attempt 1). Regenerating with extra-safe prompt...`);
-    ({ imagePath: currentImagePath, storagePath: currentStoragePath } =
-      await regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracker }));
-
-    // Attempt 2 — extra-safe regenerated image
-    try {
-      const imageUrl = await resolveSignedUrl(currentStoragePath, scene.scene_number);
-      klingTaskId = await withRetry(
-        () => submitKlingJob({ imageUrl, prompt, motionParams }),
-        { maxRetries: 3, baseDelayMs: 30000, stage: STAGE, taskId }
-      );
-    } catch (err2) {
-      if (!isNsfwError(err2)) throw err2;
-
-      console.warn(`  ⚠️  Scene ${scene.scene_number} NSFW rejected (attempt 2). Using static image fallback.`);
-      return staticImageFallback({ taskId, scene, imagePath: currentImagePath, storagePath: currentStoragePath, tmpDir, tracker });
-    }
-  }
-
-  const videoUrl = await withRetry(
-    () => pollKlingJob(klingTaskId, 300000),
-    { maxRetries: 2, baseDelayMs: 10000, stage: STAGE, taskId }
+  const imageUrl = await resolveSignedUrl(currentStoragePath, scene.scene_number);
+  const wanTaskId = await withRetry(
+    () => submitWanJob({ imageUrl, prompt }),
+    { maxRetries: 3, baseDelayMs: 30000, stage: STAGE, taskId }
   );
 
-  const videoBuffer = await downloadKlingVideo(videoUrl);
+  // Poll for result
+  const videoUrl = await withRetry(
+    () => pollWanJob(wanTaskId, 600000),
+    { maxRetries: 2, baseDelayMs: 15000, stage: STAGE, taskId }
+  );
+
+  const videoBuffer = await downloadWanVideo(videoUrl);
 
   // Save locally
   const scenesDir = join(tmpDir, 'scenes');
@@ -171,6 +158,22 @@ async function animateScene({ taskId, scene, imagePath, storagePath, characterMa
 
   console.log(`  ✓ Scene ${scene.scene_number} animated ($${cost.toFixed(4)})`);
   return { scene, animPath, storagePath: animStoragePath };
+}
+
+/**
+ * Ensure we have a local copy of the scene image.
+ * If imagePath is null (resume path — scene was skipped in stage 4), download from storage.
+ */
+async function ensureLocalImagePath({ imagePath, storagePath, sceneNumber, tmpDir }) {
+  if (imagePath) return imagePath;
+  // Download from Supabase Storage
+  const buffer = await downloadFromStorage({ bucket: BUCKETS.scenes, path: storagePath });
+  const scenesDir = join(tmpDir, 'scenes');
+  await fs.mkdir(scenesDir, { recursive: true });
+  const localPath = join(scenesDir, `scene_${String(sceneNumber).padStart(2, '0')}_image.png`);
+  await fs.writeFile(localPath, buffer);
+  console.log(`  ↩️  Downloaded scene ${sceneNumber} image from storage to ${localPath}`);
+  return localPath;
 }
 
 async function resolveSignedUrl(storagePath, sceneNumber) {
