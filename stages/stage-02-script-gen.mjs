@@ -7,7 +7,7 @@ import { getSupabase } from '../lib/supabase.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { callClaude } from '../../shared/claude.mjs';
-import { getSetting } from '../lib/settings.mjs';
+import { getSetting, getVideoType } from '../lib/settings.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -44,7 +44,7 @@ function containsTamilUnicode(text) {
 const VALID_SPEAKERS = new Set(['narrator', 'kavin', 'kitti', 'valli', 'sparrows', 'elder']);
 const VALID_EMOTIONS = new Set(['excited', 'happy', 'sad', 'scared', 'gentle', 'whisper', 'angry', 'normal']);
 
-function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback }) {
+function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, videoType = 'long' }) {
   const characterJson = JSON.stringify(
     (characters || []).map(c => ({ name: c.name, description: c.description })),
     null, 2
@@ -58,7 +58,11 @@ function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, cl
     ? `\n\n---\nVIDEO PRODUCTION FEEDBACK (APPLY TO THIS VIDEO):\n${videoFeedback}\n---`
     : '';
 
-  return `You are a Tamil children's story scriptwriter for the YouTube channel @tinytamiltales.${styleGuideSection}${feedbackSection}
+  const videoTypeNote = videoType === 'short'
+    ? `\nVIDEO FORMAT: YouTube Short (~60–90s total). Generate exactly ${targetClips} scenes (8 max). Keep each scene punchy and fast-paced.`
+    : `\nVIDEO FORMAT: Long-form YouTube video (~${Math.round(targetClips * clipDurationSeconds / 60)} minutes). Generate exactly ${targetClips} scenes.`;
+
+  return `You are a Tamil children's story scriptwriter for the YouTube channel @tinytamiltales.${styleGuideSection}${feedbackSection}${videoTypeNote}
 
 TASK: Generate exactly ${targetClips} scenes for a Tamil kids story. Each scene is ONE visual moment.
 
@@ -146,18 +150,19 @@ export async function runStage2(taskId, tracker, state = {}) {
   const sb = getSupabase();
 
   // Read pipeline settings
-  let targetClips = 24;
-  let clipDurationSeconds = 10;
+  const videoType = await getVideoType(); // 'long' | 'short'
+  let targetClips = videoType === 'short' ? 8 : 24;
+  let clipDurationSeconds = videoType === 'short' ? 7 : 10;
   try {
     const rawClips = await getSetting('target_clips');
-    if (rawClips) targetClips = parseInt(rawClips, 10) || 24;
+    if (rawClips) targetClips = parseInt(rawClips, 10) || targetClips;
   } catch { /* use default */ }
   try {
     const rawDur = await getSetting('clip_duration_seconds');
-    if (rawDur) clipDurationSeconds = parseInt(rawDur, 10) || 10;
+    if (rawDur) clipDurationSeconds = parseInt(rawDur, 10) || clipDurationSeconds;
   } catch { /* use default */ }
 
-  console.log(`  target_clips=${targetClips}, clip_duration_seconds=${clipDurationSeconds}`);
+  console.log(`  video_type=${videoType}, target_clips=${targetClips}, clip_duration_seconds=${clipDurationSeconds}`);
 
   // Get character library for Claude context
   const { data: characters } = await sb
@@ -188,7 +193,7 @@ export async function runStage2(taskId, tracker, state = {}) {
     try {
       console.log(`  Generation attempt ${attempt}/3...`);
       const result = await withRetry(
-        () => generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback }),
+        () => generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, videoType }),
         { maxRetries: 5, baseDelayMs: 15000, stage: 2, taskId }
       );
       validateScenes(result.scenes, targetClips);
@@ -259,16 +264,16 @@ export async function runStage2(taskId, tracker, state = {}) {
     youtube_seo,
   };
 
-  return { ...state, scenes, episodeNumber, youtube_seo, script };
+  return { ...state, scenes, episodeNumber, youtube_seo, script, videoType };
 }
 
-async function generateScript({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback }) {
+async function generateScript({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, videoType = 'long' }) {
   if (!process.env.ANTHROPIC_API_KEY) {
     console.warn('No ANTHROPIC_API_KEY — using sample scenes');
     return getSampleResult(concept, episodeNumber, targetClips);
   }
 
-  const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback });
+  const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, videoType });
 
   const message = await callClaude({
     model: 'claude-sonnet-4-6',

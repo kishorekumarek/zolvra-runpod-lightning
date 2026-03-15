@@ -3,43 +3,14 @@
 import 'dotenv/config';
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import Anthropic from '@anthropic-ai/sdk';
 import { getSupabase } from '../lib/supabase.mjs';
-import { isFeedbackCollectionMode } from '../lib/settings.mjs';
+import { isFeedbackCollectionMode, getVideoType } from '../lib/settings.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
 import { generateSceneImage, buildScenePrompt, estimateImageCost } from '../lib/image-gen.mjs';
 import { uploadSceneImage, getSceneImageUrl, BUCKETS } from '../lib/storage.mjs';
 import { createTmpDir } from '../lib/ffmpeg.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { calcImageCost } from '../lib/cost-tracker.mjs';
-
-/**
- * Validate that an image contains only animals/birds with no human characters.
- * Returns true if safe (no humans), false if humans detected.
- */
-async function validateNoHumans(imageBuffer) {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const imageBase64 = imageBuffer.toString('base64');
-  const msg = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 10,
-    messages: [{
-      role: 'user',
-      content: [
-        {
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/png', data: imageBase64 },
-        },
-        {
-          type: 'text',
-          text: 'Does this image show only animals/birds with NO human characters? Answer YES or NO.',
-        },
-      ],
-    }],
-  });
-  const answer = msg.content[0]?.text?.trim().toUpperCase();
-  return answer === 'YES';
-}
 
 const STAGE = 4;
 const MAX_SCENE_FAILURES = 5;
@@ -51,7 +22,13 @@ const MAX_SCENE_FAILURES = 5;
 export async function runStage4(taskId, tracker, state = {}) {
   console.log('🎨 Stage 4: Scene illustration...');
 
-  let { scenes, characterMap, parentCardId } = state;
+  const videoType = state.videoType ?? await getVideoType(); // 'long' | 'short'
+  const aspectRatio = videoType === 'short' ? '9:16' : '16:9';
+  console.log(`  video_type=${videoType}, aspectRatio=${aspectRatio}`);
+
+  let { scenes, parentCardId } = state;
+  // Prefer characterMap with reference image buffers if available
+  const characterMap = state.characterMapWithImages ?? state.characterMap;
 
   if (!scenes) {
     // Fallback: load from the most recent stage-2 run for this task
@@ -99,7 +76,7 @@ export async function runStage4(taskId, tracker, state = {}) {
       results.push({ status: 'fulfilled', value: { scene, imagePath: null, storagePath: asset?.image_url }, scene });
       continue;
     }
-    const result = await illustrateScene({ taskId, scene, characterMap, tmpDir, tracker })
+    const result = await illustrateScene({ taskId, scene, characterMap, tmpDir, tracker, aspectRatio })
       .then(val => ({ status: 'fulfilled', value: val, scene }))
       .catch(err => ({ status: 'rejected', reason: err, scene }));
     results.push(result);
@@ -148,34 +125,33 @@ export async function runStage4(taskId, tracker, state = {}) {
   return { ...state, scenes, sceneImagePaths, tmpDir };
 }
 
-async function illustrateScene({ taskId, scene, characterMap, tmpDir, tracker }) {
-  // Look up character by scene.speaker
-  const speakerKey = scene.speaker?.toLowerCase() ?? 'narrator';
+async function illustrateScene({ taskId, scene, characterMap, tmpDir, tracker, aspectRatio = '16:9' }) {
+  // Look up primary character by scene.speaker
   const character = characterMap[scene.speaker]
     ?? characterMap[scene.speaker?.toUpperCase()]
     ?? characterMap['NARRATOR']
     ?? null;
 
   const prompt = buildScenePrompt(scene, character);
-  console.log(`  Generating image for scene ${scene.scene_number} (${scene.speaker}/${scene.emotion})...`);
+  console.log(`  Generating image for scene ${scene.scene_number} (${scene.speaker}/${scene.emotion}, ${aspectRatio})...`);
 
-  let imageBuffer = await withRetry(
-    () => generateSceneImage({ prompt, sceneNumber: scene.scene_number }),
+  // Collect reference image buffers from characters appearing in this scene
+  const sceneCharacterKeys = scene.characters?.length
+    ? scene.characters
+    : (scene.speaker ? [scene.speaker] : []);
+  const referenceImages = sceneCharacterKeys
+    .map(key => characterMap[key]?.referenceImageBuffer ?? characterMap[key?.toUpperCase()]?.referenceImageBuffer)
+    .filter(Boolean)
+    .slice(0, 4); // Gemini 3.1 Flash cap: 4 reference images
+
+  if (referenceImages.length > 0) {
+    console.log(`  ↩️  Attaching ${referenceImages.length} character reference image(s) for scene ${scene.scene_number}`);
+  }
+
+  const imageBuffer = await withRetry(
+    () => generateSceneImage({ prompt, sceneNumber: scene.scene_number, aspectRatio, referenceImages }),
     { maxRetries: 3, baseDelayMs: 15000, stage: STAGE, taskId }
   );
-
-  // Validate no human characters (max 2 retries)
-  let safePrompt = prompt;
-  for (let retry = 0; retry < 2; retry++) {
-    const isAnimalOnly = await validateNoHumans(imageBuffer);
-    if (isAnimalOnly) break;
-    console.warn(`  ⚠️  Scene ${scene.scene_number}: humans detected — retrying with animal-only prompt (attempt ${retry + 1}/2)`);
-    safePrompt = 'Animated storybook style, animals only, absolutely no humans or children. ' + safePrompt;
-    imageBuffer = await withRetry(
-      () => generateSceneImage({ prompt: safePrompt, sceneNumber: scene.scene_number }),
-      { maxRetries: 3, baseDelayMs: 15000, stage: STAGE, taskId }
-    );
-  }
 
   // Save locally
   const scenesDir = join(tmpDir, 'scenes');

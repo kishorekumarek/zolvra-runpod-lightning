@@ -1,7 +1,7 @@
 // stages/stage-09-publish.mjs — Publish to YouTube + feedback loop
 import 'dotenv/config';
 import { getSupabase } from '../lib/supabase.mjs';
-import { getSetting, setSetting, isFeedbackCollectionMode } from '../lib/settings.mjs';
+import { getSetting, setSetting, isFeedbackCollectionMode, getVideoType } from '../lib/settings.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
 import { publishVideo, addToPlaylist } from '../lib/youtube.mjs';
 import { analyzeVideoFeedback, runBatchFeedbackAnalysis } from '../lib/feedback-engine.mjs';
@@ -19,6 +19,8 @@ export async function runStage9(taskId, tracker, state = {}) {
   if (!youtubeVideoId) throw new Error('Stage 9: youtubeVideoId not found');
 
   const sb = getSupabase();
+  const videoType = state.videoType ?? await getVideoType(); // 'long' | 'short'
+  console.log(`  video_type=${videoType}`);
 
   // NOTE: Video was uploaded as unlisted in Stage 8.
   // Stage 9 does NOT auto-publish — Darl reviews and makes public manually.
@@ -31,6 +33,14 @@ export async function runStage9(taskId, tracker, state = {}) {
   ).catch(err => {
     console.warn(`  ⚠️  Playlist assignment failed (non-fatal): ${err.message}`);
   });
+
+  // End card: long videos only (Shorts don't support end cards)
+  if (videoType === 'long') {
+    // TODO: attach end card via YouTube API when end card template is configured
+    console.log(`  📌 End card eligible (long video) — attach via YouTube Studio if template is set.`);
+  } else {
+    console.log(`  ⏭️  Skipping end card — not applicable for YouTube Shorts.`);
+  }
 
   console.log(`  ✅ Published: https://youtu.be/${youtubeVideoId}`);
 

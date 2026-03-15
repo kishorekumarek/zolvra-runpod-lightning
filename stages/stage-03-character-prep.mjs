@@ -1,11 +1,14 @@
-// stages/stage-03-character-prep.mjs — Resolve characters from library
+// stages/stage-03-character-prep.mjs — Resolve characters from library + generate reference images
 // Auto-stage — but checks isFeedbackCollectionMode()
 import 'dotenv/config';
+import { promises as fs } from 'fs';
+import { join } from 'path';
 import { getSupabase } from '../lib/supabase.mjs';
 import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { createNexusCard, createNexusReviewCard } from '../lib/nexus-client.mjs';
 import { getSupabase as sb } from '../lib/supabase.mjs';
 import { withRetry } from '../lib/retry.mjs';
+import { generateSceneImage } from '../lib/image-gen.mjs';
 
 const STAGE = 3;
 
@@ -73,6 +76,29 @@ export async function runStage3(taskId, tracker, state = {}) {
     }
   }
 
+  // Generate reference PNG for each character using Gemini image gen
+  console.log('  🎨 Generating character reference images...');
+  const charTmpDir = `/tmp/${taskId}/characters`;
+  await fs.mkdir(charTmpDir, { recursive: true });
+
+  for (const [name, character] of Object.entries(characterMap)) {
+    try {
+      const refPrompt = (character.image_prompt || character.description || name) +
+        ', full body, plain white background, reference sheet, 3D cartoon animation still, Pixar-style, child-friendly';
+      const buffer = await generateSceneImage({
+        prompt: refPrompt,
+        sceneNumber: 0,
+        aspectRatio: '1:1',
+      });
+      const refPath = join(charTmpDir, `${name.toLowerCase()}.png`);
+      await fs.writeFile(refPath, buffer);
+      character.referenceImageBuffer = buffer;
+      console.log(`  ✓ Reference image generated for ${name}`);
+    } catch (err) {
+      console.warn(`  ⚠️  Reference image gen failed for ${name} (falling back to text-only): ${err.message}`);
+    }
+  }
+
   // Feedback collection mode: post summary for human review
   if (await isFeedbackCollectionMode()) {
     const charSummary = Object.values(characterMap)
@@ -96,5 +122,6 @@ export async function runStage3(taskId, tracker, state = {}) {
   }
 
   console.log(`✅ Stage 3 complete. Characters: ${Object.keys(characterMap).join(', ')}`);
-  return { ...state, characterMap };
+  // characterMapWithImages = same map, characters now include referenceImageBuffer where generated
+  return { ...state, characterMap, characterMapWithImages: characterMap };
 }

@@ -5,7 +5,7 @@ import { execSync } from 'child_process';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getSupabase } from '../lib/supabase.mjs';
-import { isFeedbackCollectionMode } from '../lib/settings.mjs';
+import { isFeedbackCollectionMode, getVideoType } from '../lib/settings.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
 import {
   getDurationSeconds,
@@ -24,10 +24,16 @@ const STAGE = 7;
  * Voice + SFX loop + BGM segment mixed via filter_complex when available.
  * Audio is overlaid within the clip window; remaining clip plays silently (ambient fills it).
  */
-function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, outputPath }) {
+function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, outputPath, videoType = 'long' }) {
   const clipDuration = getDurationSeconds(clipPath);
   const audioDuration = getDurationSeconds(audioPath);
-  const sceneDur = Math.max(clipDuration, audioDuration);
+  const targetDuration = videoType === 'short' ? 7 : 10;
+  const sceneDur = Math.max(clipDuration, audioDuration, targetDuration);
+
+  // Scale/crop filter depends on video format
+  const scaleFilter = videoType === 'short'
+    ? 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920'
+    : 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720';
 
   if (sfxPath && bgmPath) {
     // 3-audio mix: voice (1.0) + SFX loop (0.3) + BGM segment (0.12)
@@ -36,7 +42,7 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
     // input 2: SFX (stream_loop -1)
     // input 3: BGM (stream_loop -1, seek to bgmOffset)
     const fc = [
-      `[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720[vout]`,
+      `[0:v]${scaleFilter}[vout]`,
       `[1:a]volume=1.0[voice]`,
       `[2:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.3[sfx]`,
       `[3:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.12[bgm]`,
@@ -66,7 +72,7 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
       `-i "${audioPath}"`,
       `-t ${sceneDur}`,
       `-map 0:v -map 1:a`,
-      `-vf "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720"`,
+      `-vf "${scaleFilter}"`,
       `-c:v libx264 -preset fast -crf 22`,
       `-c:a aac -b:a 192k`,
       `"${outputPath}"`,
@@ -115,6 +121,9 @@ export async function runStage7(taskId, tracker, state = {}) {
   if (!scenes) throw new Error('Stage 7: scenes not found');
   if (!tmpDir) throw new Error('Stage 7: tmpDir not found');
 
+  const videoType = state.videoType ?? await getVideoType(); // 'long' | 'short'
+  console.log(`  video_type=${videoType}`);
+
   const sb = getSupabase();
   const assemblyDir = join(tmpDir, 'assembly');
   await fs.mkdir(assemblyDir, { recursive: true });
@@ -158,6 +167,7 @@ export async function runStage7(taskId, tracker, state = {}) {
         bgmPath,
         bgmOffset,
         outputPath: finalPath,
+        videoType,
       });
       bgmOffset += sceneDur;
     } else if (imagePath) {
