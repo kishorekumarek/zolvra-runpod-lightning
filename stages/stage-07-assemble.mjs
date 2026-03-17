@@ -27,8 +27,7 @@ const STAGE = 7;
 function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, outputPath, videoType = 'long' }) {
   const clipDuration = getDurationSeconds(clipPath);
   const audioDuration = getDurationSeconds(audioPath);
-  const targetDuration = videoType === 'short' ? 7 : 10;
-  const sceneDur = Math.max(clipDuration, audioDuration, targetDuration);
+  const sceneDur = audioDuration > 0 ? audioDuration : clipDuration;
 
   // Scale/crop filter depends on video format
   const scaleFilter = videoType === 'short'
@@ -51,7 +50,7 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
 
     const cmd = [
       `"${FFMPEG}" -y`,
-      `-stream_loop -1 -i "${clipPath}"`,
+      `-i "${clipPath}"`,
       `-i "${audioPath}"`,
       `-stream_loop -1 -i "${sfxPath}"`,
       `-ss ${bgmOffset.toFixed(3)} -stream_loop -1 -i "${bgmPath}"`,
@@ -65,10 +64,10 @@ function mergeClipWithAudio({ clipPath, audioPath, sfxPath, bgmPath, bgmOffset, 
     ].join(' ');
     execSync(cmd, { stdio: 'pipe' });
   } else {
-    // Fallback: voice only, loop clip to cover full scene duration
+    // Fallback: voice only, clip plays once trimmed to audio duration
     const cmd = [
       `"${FFMPEG}" -y`,
-      `-stream_loop -1 -i "${clipPath}"`,
+      `-i "${clipPath}"`,
       `-i "${audioPath}"`,
       `-t ${sceneDur}`,
       `-map 0:v -map 1:a`,
@@ -204,8 +203,101 @@ export async function runStage7(taskId, tracker, state = {}) {
     await fs.rename(concatPath, finalPath);
   }
 
+  const preFinalDuration = getDurationSeconds(finalPath);
+  console.log(`  ✓ Pre-final video: ${preFinalDuration.toFixed(1)}s`);
+
+  // Logo overlay (top-right, ~12% of video width, 20px padding)
+  const logoPath = join(import.meta.dirname, '..', 'assets', 'channel-logo.png');
+  let logoApplied = false;
+  try {
+    await fs.access(logoPath);
+    const withLogoPath = join(assemblyDir, 'with-logo.mp4');
+    // Get video width for logo scaling
+    const dims = execSync(
+      `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "${finalPath}"`
+    ).toString().trim();
+    const vidW = parseInt(dims) || 1080;
+    const logoW = Math.round(vidW * 0.12);
+    execSync([
+      `"${FFMPEG}" -y`,
+      `-i "${finalPath}"`,
+      `-i "${logoPath}"`,
+      `-filter_complex "[1:v]scale=${logoW}:-1[logo];[0:v][logo]overlay=W-w-20:20[vout]"`,
+      `-map "[vout]" -map 0:a`,
+      `-c:v libx264 -preset fast -crf 23 -c:a copy`,
+      `"${withLogoPath}"`,
+    ].join(' '), { stdio: 'pipe' });
+    await fs.unlink(finalPath).catch(() => {});
+    await fs.rename(withLogoPath, finalPath);
+    logoApplied = true;
+    console.log(`  🏷️  Logo overlay applied (${logoW}px, top-right)`);
+  } catch {
+    console.warn('  ⚠️  Logo file not found — skipping overlay');
+  }
+
+  // End card (append shorts_end_card.mp4 + end_card_audio.mp3 if they exist)
+  const endCardVideoPath = join(import.meta.dirname, '..', 'assets', 'shorts_end_card.mp4');
+  const endCardAudioPath = join(import.meta.dirname, '..', 'assets', 'end_card_audio.mp3');
+  let endCardAppended = false;
+  try {
+    await fs.access(endCardVideoPath);
+    await fs.access(endCardAudioPath);
+
+    // Get main video dimensions for end card scaling
+    const mainDims = execSync(
+      `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${finalPath}"`
+    ).toString().trim().split(',');
+    const [mW, mH] = mainDims.map(Number);
+
+    // Re-encode end card to match main video
+    const endCardReencoded = join(assemblyDir, 'end-card-reencoded.mp4');
+    execSync([
+      `"${FFMPEG}" -y`,
+      `-i "${endCardVideoPath}"`,
+      `-i "${endCardAudioPath}"`,
+      `-map 0:v -map 1:a`,
+      `-c:v libx264 -preset fast -crf 23`,
+      `-vf "scale=${mW}:${mH}:force_original_aspect_ratio=decrease,pad=${mW}:${mH}:(ow-iw)/2:(oh-ih)/2"`,
+      `-c:a aac -b:a 128k -r 30`,
+      `"${endCardReencoded}"`,
+    ].join(' '), { stdio: 'pipe' });
+
+    // Re-encode main to ensure matching params for concat
+    const mainReencoded = join(assemblyDir, 'main-reencoded.mp4');
+    execSync([
+      `"${FFMPEG}" -y`,
+      `-i "${finalPath}"`,
+      `-c:v libx264 -preset fast -crf 23 -r 30`,
+      `-c:a aac -b:a 128k`,
+      `"${mainReencoded}"`,
+    ].join(' '), { stdio: 'pipe' });
+
+    // Concat main + end card
+    const concatEndPath = join(assemblyDir, 'concat-end.txt');
+    await fs.writeFile(concatEndPath, `file '${mainReencoded}'\nfile '${endCardReencoded}'\n`);
+    const withEndCardPath = join(assemblyDir, 'with-endcard.mp4');
+    execSync(`"${FFMPEG}" -y -f concat -safe 0 -i "${concatEndPath}" -c copy "${withEndCardPath}"`, { stdio: 'pipe' });
+
+    // Fix sync drift with -shortest
+    const syncedPath = join(assemblyDir, 'synced-final.mp4');
+    execSync([
+      `"${FFMPEG}" -y`,
+      `-i "${withEndCardPath}"`,
+      `-c:v libx264 -preset fast -crf 23`,
+      `-c:a aac -b:a 128k -shortest`,
+      `"${syncedPath}"`,
+    ].join(' '), { stdio: 'pipe' });
+
+    await fs.unlink(finalPath).catch(() => {});
+    await fs.rename(syncedPath, finalPath);
+    endCardAppended = true;
+    console.log('  📌 End card appended + sync fixed');
+  } catch (err) {
+    console.warn(`  ⚠️  End card not appended: ${err.message}`);
+  }
+
   const duration = getDurationSeconds(finalPath);
-  console.log(`  ✓ Final video: ${duration.toFixed(1)}s`);
+  console.log(`  ✓ Final video: ${duration.toFixed(1)}s (logo: ${logoApplied ? '✅' : '❌'}, end card: ${endCardAppended ? '✅' : '❌'})`);
 
   // Feedback collection mode — review assembled video
   if (await isFeedbackCollectionMode()) {

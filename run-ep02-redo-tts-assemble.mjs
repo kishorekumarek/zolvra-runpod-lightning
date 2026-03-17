@@ -95,12 +95,26 @@ const normalisedScenes = scenes.map(s => ({
   ...s,
   text: s.text ?? s.dialogue ?? '',
 }));
-console.log('\n📝 Scene dialogue preview:');
-normalisedScenes.forEach(s => console.log(`  Scene ${s.scene_number} [${s.speaker}]: "${s.text.slice(0, 60)}..."`));
+
+// ── Inject corrected v3 dialogue (audio tags + proper speakers) ──────────────
+const correctedScript = {
+  1: { text: '[excited] KAAViyaa! MeenU! Vaanga vaanga, [laughing] vilaiyaadalam vilaiyaadalam!', speaker: 'arjun', emotion: 'excited' },
+  2: { text: '[surprised] Haiyyo! PAARU paaru! [amazed] Minmini poochi! Minmini POOCHI!', speaker: 'arjun', emotion: 'wonder' },
+  3: { text: '[excited] OdUnga ODI Pidinga [laughing], [giggling]thappichida poguthu, seekram pidinga', speaker: 'kaviya', emotion: 'excited' },
+  4: { text: '[excited] PUdinga PUdinga! BOTTLE-la podunga! [laughing] Paaru evvalavu iruku!', speaker: 'arjun', emotion: 'excited' },
+  5: { text: '[sad] Arjun... paaru. [sighs] Bottle-la potathuku apram... minmini poochiyoda velicham konjam konjama koraiyithu...', speaker: 'kaviya', emotion: 'sad' },
+  6: { text: '[thoughtful] Antha poochigalukku bottle-ulla adaipattu irukrathu pidikala... [hopeful] velila vitidalama?', speaker: 'kaviya', emotion: 'gentle' },
+  7: { text: '[whispers] Ponga... ponga... [gentle] seekiram ponga.', speaker: 'kaviya', emotion: 'whisper' },
+  8: { text: '[amazed] Paaru Kaaviya akka... ROMBA azhagaa irukku. [calmly] adachi vekkaama, freeya vidrathudhaan nallathu [applause]', speaker: 'meenu', emotion: 'awe' },
+};
+const patchedScenes = normalisedScenes.map(s => ({ ...s, ...(correctedScript[s.scene_number] || {}) }));
+
+console.log('\n📝 Scene dialogue preview (corrected):');
+patchedScenes.forEach(s => console.log(`  Scene ${s.scene_number} [${s.speaker}/${s.emotion}]: "${s.text.slice(0, 60)}"`));
 
 let state = {
   script,
-  scenes: normalisedScenes,
+  scenes: patchedScenes,
   sceneAnimPaths,
   videoType: 'short',
   parentCardId: '176',
@@ -128,7 +142,7 @@ console.log('\n🖼️  Applying logo watermark...');
 const outputDir = '/Users/friday/.openclaw/workspace/streams/youtube/output';
 await fs.mkdir(outputDir, { recursive: true });
 const logoPath = '/Users/friday/.openclaw/workspace/streams/youtube/assets/channel-logo.png';
-const finalOutput = join(outputDir, 'ep02-minminni-final.mp4');
+const finalOutput = join(outputDir, 'ep02-minminni-v3-final.mp4');
 
 const ffmpegCmd = [
   `ffmpeg -y`,

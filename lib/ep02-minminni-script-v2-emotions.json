@@ -1,0 +1,242 @@
+{
+  "title": "மின்மினி — Minminni (Fireflies) — EP02 Short",
+  "episode": 2,
+  "video_type": "short",
+  "duration_target": "4 min (8 scenes × ~30s each)",
+  "target_clips": 24,
+  "clip_duration_seconds": 10,
+  "moral": "You can't own something wild. True beauty is in freedom.",
+  "language": "Colloquial Tamil + Tanglish (diaspora kids)",
+  "characters": {
+    "arjun": {
+      "name": "Arjun",
+      "age": 7,
+      "gender": "M",
+      "description": "energetic, mischievous Tamil boy",
+      "voice_id": "NNl6r8mD7vthiJatiJt1",
+      "voice_name": "Bradford (Expressive & Articulate)",
+      "accent": "British",
+      "use_eleven_v3_style": true
+    },
+    "kaviya": {
+      "name": "Kaviya",
+      "age": 6,
+      "gender": "F",
+      "description": "curious, empathetic Tamil girl — emotional arc is KEY",
+      "voice_id": "Z3R5wn05IrDiVCyEkUrK",
+      "voice_name": "Arabella (Mysterious & Emotive)",
+      "accent": "American",
+      "use_eleven_v3_style": true
+    },
+    "meenu": {
+      "name": "Meenu",
+      "age": 5,
+      "gender": "F",
+      "description": "shy but cheerful, youngest",
+      "voice_id": "tnSpp4vdxKPjI9w0GnoV",
+      "voice_name": "Hope (Upbeat & Clear)",
+      "accent": "American",
+      "use_eleven_v3_style": true
+    },
+    "paati": {
+      "name": "Paati",
+      "age": 65,
+      "gender": "F",
+      "description": "grandmother — reactions only, no dialogue",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "voice_name": "Monika Sogam (Deep & Natural — Indian English)",
+      "accent": "Indian",
+      "dialogue_type": "none — humming / sighs / gentle laughs only"
+    }
+  },
+  "scenes": [
+    {
+      "scene_number": 1,
+      "duration_seconds": 8,
+      "speaker": "Arjun",
+      "tamil_dialogue": "Kaviyaa! Meenu! Vaanga, vilaiyaadalam!",
+      "english_gloss": "Kaviya! Meenu! Come, let's play!",
+      "emotion": "excited_joy",
+      "emotion_description": "Pure boyish excitement. Calling friends with infectious energy.",
+      "voice_id": "NNl6r8mD7vthiJatiJt1",
+      "voice_name": "Bradford",
+      "tts_style": "excited",
+      "tts_prompt": "Arjun is bursting with energy, inviting his friends to play. High-pitched, enthusiastic, fast delivery. A 7-year-old boy's unbridled joy.",
+      "stability": 0.5,
+      "use_speaker_boost": true,
+      "characters_present": ["Arjun", "Kaviya", "Meenu", "Paati"],
+      "visual_note": "Arjun running barefoot through courtyard at dusk, arms wide, calling out."
+    },
+    {
+      "scene_number": 2,
+      "duration_seconds": 8,
+      "speaker": "Arjun",
+      "tamil_dialogue": "Ayo! Paaru, paaru! Minminni! Minminni!",
+      "english_gloss": "Wow! Look, look! Fireflies! Fireflies!",
+      "emotion": "wonder_awe",
+      "emotion_description": "Sudden shift from playful to awestruck. Discovery moment.",
+      "voice_id": "NNl6r8mD7vthiJatiJt1",
+      "voice_name": "Bradford",
+      "tts_style": "excited",
+      "tts_prompt": "Arjun spots the fireflies and his energy transforms from playful to genuinely awestruck. Breathy, slower, drawn-out 'Ayo!' and 'Paaru!' like he can't believe what he's seeing.",
+      "stability": 0.4,
+      "use_speaker_boost": false,
+      "characters_present": ["Arjun", "Kaviya", "Meenu"],
+      "visual_note": "First fireflies appear. Arjun's eyes huge, pointing off-screen."
+    },
+    {
+      "scene_number": 3,
+      "duration_seconds": 9,
+      "speaker": "Kaviya",
+      "tamil_dialogue": "Pidichchudunga! Naanum varen! Odunga, odunga!",
+      "english_gloss": "Catch them! I'm coming too! Run, run!",
+      "emotion": "playful_joy",
+      "emotion_description": "Kaviya joins the excitement, taking charge. Energetic and commanding.",
+      "voice_id": "Z3R5wn05IrDiVCyEkUrK",
+      "voice_name": "Arabella",
+      "tts_style": "excited",
+      "tts_prompt": "Kaviya is excited but also taking charge. Her voice is confident, playful, a bit commanding. She's rallying the others to join her. Clear, energetic delivery with youthful glee.",
+      "stability": 0.5,
+      "use_speaker_boost": true,
+      "characters_present": ["Arjun", "Kaviya", "Meenu"],
+      "visual_note": "All three kids running through yard chasing fireflies, arms outstretched, laughing."
+    },
+    {
+      "scene_number": 4,
+      "duration_seconds": 9,
+      "speaker": "Arjun",
+      "tamil_dialogue": "Pudinga, pudinga! Bottle-la podunga! Paaru, evvalavu iruku!",
+      "english_gloss": "Wait, wait! Put them in a bottle! Look how many there are!",
+      "emotion": "mischievous_wonder",
+      "emotion_description": "Arjun has an idea. Excited but a bit scheming. Not yet aware of the consequence.",
+      "voice_id": "NNl6r8mD7vthiJatiJt1",
+      "voice_name": "Bradford",
+      "tts_style": "excited",
+      "tts_prompt": "Arjun has just thought of something clever. His voice is excited, conspiratorial, like he's about to do something he's proud of. A hint of playful mischief, not malice.",
+      "stability": 0.5,
+      "use_speaker_boost": true,
+      "characters_present": ["Arjun", "Kaviya", "Meenu"],
+      "visual_note": "Arjun holds up a clear glass jar with 8-10 fireflies glowing inside. Kids' faces lit by jar glow."
+    },
+    {
+      "scene_number": 5,
+      "duration_seconds": 10,
+      "speaker": "Kaviya",
+      "tamil_dialogue": "Arjun... paaru. Bottle-la potathuku apram, minminni poochiyoda velicham konjam, konjama koraiyithu!",
+      "english_gloss": "Arjun... look. Since we put them in the bottle, the fireflies' light is getting dimmer and dimmer.",
+      "emotion": "sadness_concern",
+      "emotion_description": "Realization dawns. Kaviya notices something is wrong. Gentle worry, not panic.",
+      "voice_id": "Z3R5wn05IrDiVCyEkUrK",
+      "voice_name": "Arabella",
+      "tts_style": "gentle",
+      "tts_prompt": "Kaviya is making a careful observation. Her voice is softer now, thoughtful, a bit sad. She's noticed the fireflies' light dimming and it's bothering her. Speak slowly, with a hint of sadness and concern, like she's putting pieces together.",
+      "stability": 0.3,
+      "use_speaker_boost": false,
+      "characters_present": ["Kaviya", "Arjun", "Meenu"],
+      "visual_note": "Close-up of jar. Firefly glow noticeably dimmer than scene 4. Kaviya holds it, looking worried."
+    },
+    {
+      "scene_number": 6,
+      "duration_seconds": 10,
+      "speaker": "Kaviya",
+      "tamil_dialogue": "Antha poochigaluku bottle-ulla adaipattu irukrathu pidikala. Velila vitralama?",
+      "english_gloss": "Those little lights don't like being trapped in the bottle. Should we let them go?",
+      "emotion": "hope_kindness",
+      "emotion_description": "Kaviya proposes release. Gentle, hopeful, asking for agreement. The turning point.",
+      "voice_id": "Z3R5wn05IrDiVCyEkUrK",
+      "voice_name": "Arabella",
+      "tts_style": "gentle",
+      "tts_prompt": "Kaviya is speaking from her heart now. Her voice is hopeful, kind, and a little questioning (she's asking Arjun). Speak softly but with quiet confidence. There's compassion and wisdom in this line.",
+      "stability": 0.4,
+      "use_speaker_boost": false,
+      "characters_present": ["Kaviya", "Arjun", "Meenu"],
+      "visual_note": "Kaviya holds jar to her chest, looking at Arjun with earnest, pleading eyes. Arjun's mischief melts into understanding. He nods."
+    },
+    {
+      "scene_number": 7,
+      "duration_seconds": 8,
+      "speaker": "Kaviya",
+      "tamil_dialogue": "Ponga... ponga... seekiram ponga.",
+      "english_gloss": "Go... go... go quickly.",
+      "emotion": "awe_reverence",
+      "emotion_description": "Kaviya releases the fireflies. Quiet, gentle, almost like a blessing.",
+      "voice_id": "Z3R5wn05IrDiVCyEkUrK",
+      "voice_name": "Arabella",
+      "tts_style": "gentle",
+      "tts_prompt": "Kaviya is releasing the fireflies like she's giving them a blessing. Whisper-soft delivery, almost reverent. Slow, deliberate, each word separate. Like she's whispering to the fireflies themselves.",
+      "stability": 0.3,
+      "use_speaker_boost": false,
+      "characters_present": ["Kaviya", "Arjun", "Meenu"],
+      "visual_note": "Slow motion. Jar tips, fireflies spiral upward into dark sky. Yard lights up dramatically."
+    },
+    {
+      "scene_number": 8,
+      "duration_seconds": 9,
+      "speaker": "Meenu",
+      "tamil_dialogue": "Paaru, Kaviya akka... romba azhagaa irukku.",
+      "english_gloss": "Look, Kaviya sister... it's so beautiful.",
+      "emotion": "awe_wonder",
+      "emotion_description": "Meenu speaks for the first time. Pure, innocent wonder. The culmination.",
+      "voice_id": "tnSpp4vdxKPjI9w0GnoV",
+      "voice_name": "Hope",
+      "tts_style": "excited",
+      "tts_prompt": "Meenu is awestruck. Her voice is small, pure, and genuinely amazed. She's looking up at hundreds of fireflies and finding the words. Slightly breathy, full of wonder. The youngest voice in the film, full of innocence.",
+      "stability": 0.4,
+      "use_speaker_boost": false,
+      "characters_present": ["Meenu", "Kaviya", "Arjun", "Paati"],
+      "visual_note": "Wide shot of entire yard filled with fireflies. Three kids stand together, looking up. Paati smiles from porch in background. Peak beauty frame."
+    }
+  ],
+  "voice_assignments_summary": {
+    "Arjun": {
+      "scenes": [1, 2, 4],
+      "voice_id": "NNl6r8mD7vthiJatiJt1",
+      "voice_name": "Bradford — Expressive & Articulate",
+      "character_arc": "excited → awestruck → mischievous → understanding"
+    },
+    "Kaviya": {
+      "scenes": [3, 5, 6, 7, 8],
+      "voice_id": "Z3R5wn05IrDiVCyEkUrK",
+      "voice_name": "Arabella — Mysterious & Emotive",
+      "character_arc": "playful → concerned → hopeful → reverent → proud"
+    },
+    "Meenu": {
+      "scenes": [8],
+      "voice_id": "tnSpp4vdxKPjI9w0GnoV",
+      "voice_name": "Hope — Upbeat & Clear",
+      "character_arc": "shy/quiet → awestruck (final line only)"
+    },
+    "Paati": {
+      "scenes": [1, 8],
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "voice_name": "Monika Sogam — Deep & Natural",
+      "character_arc": "silent observer → warm smile. NO DIALOGUE. Humming/sighs/gentle laugh only."
+    }
+  },
+  "eleven_labs_v3_settings": {
+    "model_id": "eleven_multilingual_v2",
+    "api_version": "v2.1",
+    "output_format": "mp3_22050_32",
+    "enable_cache": true,
+    "optimizations": {
+      "use_style": "enable per-scene for emotion",
+      "use_speaker_boost": "enable for high-energy scenes",
+      "stability_adaptive": "lower stability (0.3–0.4) for emotional variation, higher (0.5) for clarity"
+    }
+  },
+  "script_qa_checklist": {
+    "tamil_authenticity": "colloquial, diaspora-appropriate, NOT formal literary Tamil",
+    "emotional_arc": "excitement → wonder → joy → mischief → realization → compassion → reverence → awe",
+    "voice_diversity": "3 distinct child voices + 1 grandmother",
+    "character_consistency": "Arjun = energetic boy, Kaviya = thoughtful/empathetic, Meenu = shy but sweet, Paati = warm observer",
+    "tts_readiness": "each scene has emotion descriptor + tts_prompt for Claude to generate voice instructions",
+    "visual_sync": "each dialogue line has visual_note for animator to match lip-sync"
+  },
+  "notes_for_voice_testing": [
+    "Test Bradford (Arjun) in scenes 1–2. Does he capture boyish wonder AND excitement?",
+    "Test Arabella (Kaviya) across 5–7. CRITICAL: Does she show emotional range from joy → sadness → hope → awe?",
+    "Test Hope (Meenu) in scene 8. Is her voice small, innocent, full of amazement?",
+    "Paati scenes: Only use Monika Sogam for humming/sighs. NO VOICE DIALOGUE.",
+    "ElevenLabs v3 style parameter: test 'excited' vs. 'gentle' in samples before full pipeline run."
+  ]
+}

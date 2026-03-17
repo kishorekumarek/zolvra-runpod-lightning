@@ -1,0 +1,176 @@
+{
+  "title": "மின்மினி — Minminni (Fireflies) — EP02 Short",
+  "episode": 2,
+  "video_type": "short",
+  "duration_target": "~4 min",
+  "total_scenes": 8,
+  "language": "Tamil (Colloquial + Tanglish — diaspora kids)",
+  "character_names_updated": {
+    "note": "Kaviya → Kaavya (updated everywhere)"
+  },
+  "characters": {
+    "arjun": {
+      "name": "Arjun",
+      "age": 7,
+      "gender": "M",
+      "voice_id": "oDV9OTaNLmINQYHfVOXe"
+    },
+    "kaavya": {
+      "name": "Kaavya",
+      "age": 6,
+      "gender": "F",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc"
+    },
+    "meenu": {
+      "name": "Meenu",
+      "age": 5,
+      "gender": "F",
+      "voice_id": "Sm1seazb4gs7RSlUVw7c"
+    },
+    "paati": {
+      "name": "Paati",
+      "age": 65,
+      "gender": "F",
+      "dialogue_type": "reactions_only (humming, sighs, no TTS dialogue)"
+    }
+  },
+  "api_request_format": {
+    "endpoint": "https://api.elevenlabs.io/v1/text-to-speech/{voiceId}?output_format=mp3_44100_128",
+    "method": "POST",
+    "headers": {
+      "xi-api-key": "YOUR_API_KEY",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "text": "text with [audio_tags] and... pauses and EMPHASIS",
+      "model_id": "eleven_v3",
+      "voice_settings": {}
+    }
+  },
+  "scenes": [
+    {
+      "scene_number": 1,
+      "duration_seconds": 8,
+      "speaker": "Arjun",
+      "tamil_text_raw": "Kaviyaa! Meenu! Vaanga, vilaiyaadalam!",
+      "tamil_text_enhanced": "[excited] Kaavyaa! Meenu! VAANGA, vilaiyaadalam!",
+      "english_gloss": "Kaavya! Meenu! Come, let's play!",
+      "emotion_tags": "[excited]",
+      "emphasis": "VAANGA (come) — shouted with energy",
+      "pause_markers": "none",
+      "voice_id": "oDV9OTaNLmINQYHfVOXe",
+      "character": "Arjun",
+      "visual_note": "Arjun running through courtyard at dusk, arms wide, calling friends"
+    },
+    {
+      "scene_number": 2,
+      "duration_seconds": 8,
+      "speaker": "Arjun",
+      "tamil_text_raw": "Ayo! Paaru, paaru! Minminni! Minminni!",
+      "tamil_text_enhanced": "[surprised] Ayo! Paaru... paaru! MINMINNI! MINMINNI!",
+      "english_gloss": "Wow! Look, look! Fireflies! Fireflies!",
+      "emotion_tags": "[surprised]",
+      "emphasis": "MINMINNI — breathless, awestruck repetition",
+      "pause_markers": "... after first 'Paaru' (pause for wonder)",
+      "voice_id": "oDV9OTaNLmINQYHfVOXe",
+      "character": "Arjun",
+      "visual_note": "First fireflies appear. Arjun's eyes wide, pointing off-screen"
+    },
+    {
+      "scene_number": 3,
+      "duration_seconds": 9,
+      "speaker": "Kaavya",
+      "tamil_text_raw": "Pidichchudunga! Naanum varen! Odunga, odunga!",
+      "tamil_text_enhanced": "[excited] Pidichchudunga! [laughing] Naanum varen! ODUNGA, odunga!",
+      "english_gloss": "Catch them! I'm coming too! Run, run!",
+      "emotion_tags": "[excited] [laughing]",
+      "emphasis": "ODUNGA — commanding, energetic",
+      "pause_markers": "none",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "character": "Kaavya",
+      "visual_note": "Kaavya joins excitement, taking charge. All three kids running"
+    },
+    {
+      "scene_number": 4,
+      "duration_seconds": 9,
+      "speaker": "Arjun",
+      "tamil_text_raw": "Pudinga, pudinga! Bottle-la podunga! Paaru, evvalavu iruku!",
+      "tamil_text_enhanced": "[mischievously] Pudinga, pudinga! Bottle-la podunga! [curious] Paaru... EVVALAVU iruku!",
+      "english_gloss": "Wait, wait! Put them in a bottle! Look how many there are!",
+      "emotion_tags": "[mischievously] [curious]",
+      "emphasis": "EVVALAVU — amazed at the number",
+      "pause_markers": "... after 'Paaru' (moment of discovery)",
+      "voice_id": "oDV9OTaNLmINQYHfVOXe",
+      "character": "Arjun",
+      "visual_note": "Jar with 8-10 glowing fireflies. Kids' faces lit by jar light"
+    },
+    {
+      "scene_number": 5,
+      "duration_seconds": 10,
+      "speaker": "Kaavya",
+      "tamil_text_raw": "Arjun... paaru. Bottle-la potathuku apram, minminni poochiyoda velicham konjam, konjama koraiyithu!",
+      "tamil_text_enhanced": "[thoughtful] Arjun... [sighs] paaru. Bottle-la potathuku apram... minminni poochiyoda velicham konjam... konjama koraiyithu.",
+      "english_gloss": "Arjun... look. Since we put them in the bottle, the fireflies' light is getting dimmer and dimmer.",
+      "emotion_tags": "[thoughtful] [sighs]",
+      "emphasis": "none (soft, realization)",
+      "pause_markers": "... after 'apram' (pause as she notices) / ... after 'konjam' (building sadness)",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "character": "Kaavya",
+      "visual_note": "Jar glow noticeably dimmer. Kaavya holds it, looking concerned"
+    },
+    {
+      "scene_number": 6,
+      "duration_seconds": 10,
+      "speaker": "Kaavya",
+      "tamil_text_raw": "Antha poochigaluku bottle-ulla adaipattu irukrathu pidikala. Velila vitralama?",
+      "tamil_text_enhanced": "[gently] Antha poochigaluku bottle-ulla adaipattu irukrathu... pidikala. [hopeful] Velila vitralama?",
+      "english_gloss": "Those little lights don't like being trapped in the bottle. Should we let them go?",
+      "emotion_tags": "[gently] [hopeful]",
+      "emphasis": "none (soft wisdom)",
+      "pause_markers": "... after 'irukrathu' (pause before saying it's not good)",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "character": "Kaavya",
+      "visual_note": "Kaavya holds jar to chest, looking at Arjun with pleading eyes"
+    },
+    {
+      "scene_number": 7,
+      "duration_seconds": 8,
+      "speaker": "Kaavya",
+      "tamil_text_raw": "Ponga... ponga... seekiram ponga.",
+      "tamil_text_enhanced": "[whispers] Ponga... ponga... seekiram ponga.",
+      "english_gloss": "Go... go... go quickly.",
+      "emotion_tags": "[whispers]",
+      "emphasis": "none (reverent, blessing-like)",
+      "pause_markers": "... between each 'Ponga' (very slow, deliberate)",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "character": "Kaavya",
+      "visual_note": "Slow motion. Jar tips, fireflies spiral upward. Yard lights up"
+    },
+    {
+      "scene_number": 8,
+      "duration_seconds": 9,
+      "speaker": "Meenu",
+      "tamil_text_raw": "Paaru, Kaavya akka... romba azhagaa irukku.",
+      "tamil_text_enhanced": "[softly amazed] Paaru, Kaavya akka... [sighs with awe] romba AZHAGAA irukku.",
+      "english_gloss": "Look, Kaavya sister... it's so beautiful.",
+      "emotion_tags": "[softly amazed] [sighs with awe]",
+      "emphasis": "AZHAGAA — beautiful, with wonder",
+      "pause_markers": "... after 'akka' (pause of awe before final revelation)",
+      "voice_id": "Sm1seazb4gs7RSlUVw7c",
+      "character": "Meenu",
+      "visual_note": "Entire yard filled with fireflies. Three kids looking up. Paati smiling from porch"
+    }
+  ],
+  "voice_settings_note": "ElevenLabs v3 requires EMPTY voice_settings: {}. No stability, no speed, no style. Everything controlled via text tags and punctuation.",
+  "example_curl_request": "curl -X POST 'https://api.elevenlabs.io/v1/text-to-speech/oDV9OTaNLmINQYHfVOXe?output_format=mp3_44100_128' \\\n -H 'xi-api-key: YOUR_API_KEY' \\\n -H 'Content-Type: application/json' \\\n -d '{\n  \"text\": \"[excited] Kaavyaa! Meenu! VAANGA, vilaiyaadalam!\",\n  \"model_id\": \"eleven_v3\",\n  \"voice_settings\": {}\n}'",
+  "dialogue_summary": {
+    "scene_1": "[excited] Kaavyaa! Meenu! VAANGA, vilaiyaadalam!",
+    "scene_2": "[surprised] Ayo! Paaru... paaru! MINMINNI! MINMINNI!",
+    "scene_3": "[excited] Pidichchudunga! [laughing] Naanum varen! ODUNGA, odunga!",
+    "scene_4": "[mischievously] Pudinga, pudinga! Bottle-la podunga! [curious] Paaru... EVVALAVU iruku!",
+    "scene_5": "[thoughtful] Arjun... [sighs] paaru. Bottle-la potathuku apram... minminni poochiyoda velicham konjam... konjama koraiyithu.",
+    "scene_6": "[gently] Antha poochigaluku bottle-ulla adaipattu irukrathu... pidikala. [hopeful] Velila vitralama?",
+    "scene_7": "[whispers] Ponga... ponga... seekiram ponga.",
+    "scene_8": "[softly amazed] Paaru, Kaavya akka... [sighs with awe] romba AZHAGAA irukku."
+  }
+}

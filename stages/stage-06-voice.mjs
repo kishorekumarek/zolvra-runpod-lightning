@@ -8,16 +8,17 @@ import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { createNexusCard } from '../lib/nexus-client.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { calcTTSCost } from '../lib/cost-tracker.mjs';
-import { VOICE_MAP, EMOTION_SETTINGS } from '../lib/voice-config.mjs';
+import { VOICE_MAP, V3_VOICE_SETTINGS } from '../lib/voice-config.mjs';
 
 const STAGE = 6;
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
 /**
- * Call ElevenLabs TTS directly with per-emotion voice settings.
+ * Call ElevenLabs TTS v3 — emotion is controlled via audio tags in the text,
+ * NOT via voice_settings (which must be empty {}).
  * Returns a Buffer of the MP3.
  */
-async function callElevenLabs({ text, voiceId, voiceSettings }) {
+async function callElevenLabs({ text, voiceId }) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) throw new Error('ELEVENLABS_API_KEY not set');
 
@@ -32,7 +33,7 @@ async function callElevenLabs({ text, voiceId, voiceSettings }) {
       body: JSON.stringify({
         text,
         model_id: 'eleven_v3',
-        voice_settings: {},
+        voice_settings: V3_VOICE_SETTINGS,  // Must be {} for v3
       }),
     }
   );
@@ -72,12 +73,13 @@ export async function runStage6(taskId, tracker, state = {}) {
   for (const scene of scenes) {
     const sceneLabel = String(scene.scene_number).padStart(2, '0');
     const voiceId = VOICE_MAP[scene.speaker?.toLowerCase()] ?? VOICE_MAP.default;
-    const voiceSettings = EMOTION_SETTINGS[scene.emotion?.toLowerCase()] ?? EMOTION_SETTINGS.normal;
 
-    console.log(`  Scene ${scene.scene_number}: speaker=${scene.speaker} → voice=${voiceId}, emotion=${scene.emotion}`);
+    console.log(`  Scene ${scene.scene_number}: speaker=${scene.speaker} → voice=${voiceId}`);
 
+    // v3: emotion is embedded in the text via audio tags (e.g. [excited], [sighs])
+    // voice_settings is always {} — see voice-config.mjs
     const audioBuffer = await withRetry(
-      () => callElevenLabs({ text: scene.text, voiceId, voiceSettings }),
+      () => callElevenLabs({ text: scene.text, voiceId }),
       { maxRetries: 3, baseDelayMs: 10000, stage: STAGE, taskId }
     );
 

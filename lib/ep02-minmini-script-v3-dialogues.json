@@ -1,0 +1,96 @@
+{
+  "title": "மினிமினி — Minmini (Fireflies) — EP02 Short",
+  "episode": 2,
+  "corrected_spelling": "Minmini (not Minminni)",
+  "dialogue_updates": "Updated with colloquial Tamil expressions + Tanglish",
+  "scenes": [
+    {
+      "scene_number": 1,
+      "speaker": "Arjun",
+      "voice_id": "oDV9OTaNLmINQYHfVOXe",
+      "dialogue_enhanced": "[excited] Kaavyaa! Meenu! VAANGA, vilaiyaadalam!",
+      "english_gloss": "Kaavya! Meenu! Come, let's play!",
+      "emotional_arc": "excited"
+    },
+    {
+      "scene_number": 2,
+      "speaker": "Arjun",
+      "voice_id": "oDV9OTaNLmINQYHfVOXe",
+      "dialogue_enhanced": "[surprised] Haiyyo! Paaru... paaru! MINMINI! MINMINI!",
+      "english_gloss": "Wow! Look... look! Fireflies! Fireflies!",
+      "emotional_arc": "surprised wonder",
+      "note": "... after first Paaru = breath of awe"
+    },
+    {
+      "scene_number": 3,
+      "speaker": "Kaavya",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "dialogue_enhanced": "[excited] Pidinga Pidinga! [laughing] Naanum varen! ODUNGA!",
+      "english_gloss": "Catch them! I'm coming too! Run, run!",
+      "emotional_arc": "excited playful"
+    },
+    {
+      "scene_number": 4,
+      "speaker": "Arjun",
+      "voice_id": "oDV9OTaNLmINQYHfVOXe",
+      "dialogue_enhanced": "[mischievously] Pudi-nga, pudi-nga! Bottle-la podunga! [curious] Paaru... EVVALAVU super-ah iruku!",
+      "english_gloss": "Wait, wait! Put them in a bottle! Look how many there are!",
+      "emotional_arc": "mischievous + curious",
+      "note": "... = moment of discovery"
+    },
+    {
+      "scene_number": 5,
+      "speaker": "Kaavya",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "dialogue_enhanced": "[thoughtful] Arjun... [sighs] paaru. Bottle-la potathukapram… minmini poochiyoda velicham konjam... konjama koraiyithu.",
+      "english_gloss": "Arjun... look. Since we put them in the bottle, the fireflies' light is getting dimmer and dimmer.",
+      "emotional_arc": "thoughtful + sadness",
+      "note": "Two ... pauses = building sadness as she realizes the problem"
+    },
+    {
+      "scene_number": 6,
+      "speaker": "Kaavya",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "dialogue_enhanced": "[gently] Antha poochigaluku bottle-ulla adaipattu irukrathu... pidikala. [hopeful] Velila vitralama?",
+      "english_gloss": "Those little lights don't like being trapped in the bottle. Should we let them go?",
+      "emotional_arc": "gently + hopeful",
+      "note": "... = pause before saying it's not good / [hopeful] = turning point"
+    },
+    {
+      "scene_number": 7,
+      "speaker": "Kaavya",
+      "voice_id": "2zRM7PkgwBPiau2jvVXc",
+      "dialogue_enhanced": "[whispers] Ponga... ponga... seekiram ponga.",
+      "english_gloss": "Go... go... go quickly.",
+      "emotional_arc": "reverent blessing",
+      "note": "Whisper + THREE ... pauses = reverent, slow, like releasing them with love"
+    },
+    {
+      "scene_number": 8,
+      "speaker": "Meenu",
+      "voice_id": "Sm1seazb4gs7RSlUVw7c",
+      "dialogue_enhanced": "[softly amazed] Paaru, Kaavya akka... [sighs with awe] romba super-ah irukku. [thoughtful] Yarayum adaichi vekave kudathu",
+      "english_gloss": "Look, Kaavya sister... it's so beautiful. You can't trap something wild.",
+      "emotional_arc": "awestruck + thoughtful wisdom",
+      "note": "... = pause of wonder / First time Meenu speaks / Final wisdom about freedom"
+    }
+  ],
+  "api_format": {
+    "endpoint": "https://api.elevenlabs.io/v1/text-to-speech/{voiceId}?output_format=mp3_44100_128",
+    "method": "POST",
+    "headers": {
+      "xi-api-key": "YOUR_API_KEY",
+      "Content-Type": "application/json"
+    },
+    "body_template": {
+      "text": "[audio_tags] dialogue with... pauses and EMPHASIS",
+      "model_id": "eleven_v3",
+      "voice_settings": {}
+    }
+  },
+  "character_voices": {
+    "Arjun": "oDV9OTaNLmINQYHfVOXe",
+    "Kaavya": "2zRM7PkgwBPiau2jvVXc",
+    "Meenu": "Sm1seazb4gs7RSlUVw7c"
+  }
+}

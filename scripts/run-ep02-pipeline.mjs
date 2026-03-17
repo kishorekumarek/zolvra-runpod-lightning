@@ -85,7 +85,7 @@ const script = {
     {
       scene_number: 2,
       speaker: 'Arjun',
-      dialogue: 'Ayo! Paaru paaru! Minminni! Minminni!',
+      dialogue: 'Ayo! Paaru, paaru! Minminni! Minminni!',
       emotion: 'wonder',
       visual_description: `Close-up of Arjun's face, eyes huge, pointing off-screen to the right. Then cut to the first firefly — a single tiny golden light floating in the semi-dark near the neem tree. Camera pulls back to reveal 10–15 fireflies beginning to appear in the darkening yard. Arjun — same locked description — mouth open in delight, one finger pointed, body leaning forward. Kaviya — same locked description — standing beside Arjun, hand over her mouth in quiet wonder. Meenu — same locked description — toddling up behind them, eyes wide, trying to see past them. Lighting: Sky now deep blue-purple. Fireflies glow as warm gold-green pinpricks of light floating in front of the neem tree. Each firefly creates a tiny soft halo of light. Ground is mostly in shadow with dappled purple-blue ambient light.`,
       characters: ['Arjun', 'Kaviya', 'Meenu'],
@@ -94,7 +94,7 @@ const script = {
     {
       scene_number: 3,
       speaker: 'Kaviya',
-      dialogue: 'Pidichchudunga! Naanum varen! Odunga odunga!',
+      dialogue: 'Pidichchudunga! Naanum varen! Odunga, odunga!',
       emotion: 'joy',
       visual_description: `Wide dynamic shot. All three kids running through the yard chasing fireflies. Arms outstretched, laughing. Fireflies scatter and swirl around them as they chase. The yard is now mostly dark, lit primarily by firefly glow and the distant porch lamp. Arjun — same locked description — leading the chase, leaping toward a cluster of fireflies, veshti flapping. Kaviya — same locked description — running with both hands cupped, one braid flying behind her. Meenu — same locked description — running, giggling, arms stretched wide, slightly stumbling but catching herself. Lighting: Primary light source: 20–30 fireflies creating a constellation of moving warm gold-green glow. Secondary: distant amber porch lamp. Children's faces lit softly from below by firefly light when they hold their hands near fireflies. Deep blue-purple sky.`,
       characters: ['Arjun', 'Kaviya', 'Meenu'],
@@ -103,7 +103,7 @@ const script = {
     {
       scene_number: 4,
       speaker: 'Arjun',
-      dialogue: 'Pudinga, Pudinga! Bottle la Podunga! Paaru evvalavu iruku!',
+      dialogue: 'Pudinga, pudinga! Bottle-la podunga! Paaru, evvalavu iruku!',
       emotion: 'joy',
       visual_description: `Close-up of a large clear glass jar (bottle) being held by Arjun. Inside: 8–10 fireflies glowing, their light filtering through the glass making the jar pulse with warm golden light. Kaviya and Meenu crowd close, faces glowing from the jar's light. Arjun — same locked description — holding the jar aloft, grinning. Kaviya — same locked description — face close to the glass, watching the fireflies with wide eyes, one braid resting on the jar. Meenu — same locked description — standing on tiptoe to see, pressing her nose close. Lighting: The jar itself is the primary light source in this shot — a warm golden-amber lantern effect. Firefly glow reflects on all three children's warm brown faces. Background is deep blue-purple night.`,
       characters: ['Arjun', 'Kaviya', 'Meenu'],
@@ -112,7 +112,7 @@ const script = {
     {
       scene_number: 5,
       speaker: 'Kaviya',
-      dialogue: 'Arjun... paaru. bottle la potathuku apram minmini poochiyoda velicham-la konjam konjama koraiyithu!',
+      dialogue: 'Arjun... paaru. Bottle-la potathuku apram, minminni poochiyoda velicham konjam, konjama koraiyithu!',
       emotion: 'sadness',
       visual_description: `Same jar, same three children — but now something is different. The fireflies inside are visibly less bright. One by one they pulse weakly. The jar that was radiant now has a muted, struggling light. Kaviya's face is the focus — she's the one who notices. Her expression shifts from excitement to sadness. Kaviya — same locked description — holding the jar now (Arjun has passed it), brow furrowed, eyes going soft with worry, lips pressed together. Arjun — same locked description — behind her, looking over her shoulder, confusion on his face. Meenu — same locked description — looking up at Kaviya's face, sensing something is wrong. Lighting: The jar's glow is noticeably dimmer than scene 4 — from warm gold to a pale, struggling yellow-green. The difference in light quality tells the story even before dialogue. Children's faces are darker, lit by a weaker source.`,
       characters: ['Kaviya', 'Arjun', 'Meenu'],
@@ -121,7 +121,7 @@ const script = {
     {
       scene_number: 6,
       speaker: 'Kaviya',
-      dialogue: 'Antha poochigaluku bottle-ulla adaipattu irukrathu pidikala. velila vitralama?',
+      dialogue: 'Antha poochigaluku bottle-ulla adaipattu irukrathu pidikala. Velila vitralama?',
       emotion: 'hope',
       visual_description: `Medium shot. Kaviya holds the jar to her chest and looks at Arjun with gentle, pleading eyes. Meenu watches Arjun. Beat. Arjun's mischief melts into understanding. He gives a slow nod. Kaviya's face opens into relief and hope — she begins to unscrew the jar lid. Kaviya — same locked description — holding jar against her chest, looking at Arjun, eyes earnest and a little watery. Arjun — same locked description — arms crossed at first, then dropping them as he understands, giving a solemn nod. Meenu — same locked description — head tilting, watching Arjun carefully, then smiling softly when he nods. Lighting: Dim firefly glow from the jar. Porch lamp visible in far background. This is the emotionally quietest, darkest lit scene — intentional. The release will feel like a sunrise after this.`,
       characters: ['Kaviya', 'Arjun', 'Meenu'],
@@ -139,7 +139,7 @@ const script = {
     {
       scene_number: 8,
       speaker: 'Meenu',
-      dialogue: 'Paaru Kaviya akka... romba azhagaa irukku.',
+      dialogue: 'Paaru, Kaviya akka... romba azhagaa irukku.',
       emotion: 'awe',
       visual_description: `Wide establishing shot of the entire yard. The three children stand together in the center, looking up and around. Hundreds of fireflies fill the yard — the neem tree, the air, the low bushes along the wall, all pulsing with soft gold-green light. It is overwhelmingly, quietly beautiful. Paati on the porch — a warm silhouette — smiles gently. Kaviya — same locked description — standing still, hands clasped in front of her, face turned up, smiling peacefully. Arjun — same locked description — arms hanging loose, head slowly turning to take it all in, rare stillness for him. Meenu — same locked description — leaning against Kaviya's arm, tiny and soft, looking up with huge round eyes. Paati — same locked description — on the thinnai in the background, silhouetted against the amber oil lamp, steel cup raised to lips, smiling. Lighting: Peak beauty frame of the entire short. Dense firefly constellation — warm gold-green everywhere. The clay pots cast tiny firefly-shadow patterns on the ground. The neem tree glows like a lantern tree. Sky is full deep indigo blue with one or two stars visible above the firefly layer. The oil lamp on the porch is a warm amber anchor in the background. Everything is soft, luminous, alive.`,
       characters: ['Kaviya', 'Arjun', 'Meenu', 'Paati'],

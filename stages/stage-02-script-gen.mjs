@@ -286,7 +286,7 @@ async function generateScript({ concept, characters, episodeNumber, targetClips,
   const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, videoType });
 
   const message = await callClaude({
-    model: 'claude-sonnet-4-6',
+    model: 'claude-opus-4-6',
     maxTokens: 8192,
     system: systemPrompt,
     messages: [{
