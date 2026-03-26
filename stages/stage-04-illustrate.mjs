@@ -5,12 +5,13 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getSupabase } from '../lib/supabase.mjs';
 import { isFeedbackCollectionMode, getVideoType } from '../lib/settings.mjs';
-import { createNexusCard } from '../lib/nexus-client.mjs';
 import { generateSceneImage, buildScenePrompt, estimateImageCost } from '../lib/image-gen.mjs';
 import { uploadSceneImage, getSceneImageUrl, BUCKETS } from '../lib/storage.mjs';
 import { createTmpDir } from '../lib/ffmpeg.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { calcImageCost } from '../lib/cost-tracker.mjs';
+import { sendApprovalBotMedia, sendTelegramMessage, sendTelegramMessageWithButtons, waitForTelegramResponse } from '../lib/telegram.mjs';
+import { getVideoConfig } from '../lib/video-config.mjs';
 
 const STAGE = 4;
 const MAX_SCENE_FAILURES = 5;
@@ -22,11 +23,11 @@ const MAX_SCENE_FAILURES = 5;
 export async function runStage4(taskId, tracker, state = {}) {
   console.log('🎨 Stage 4: Scene illustration...');
 
-  const videoType = state.videoType ?? await getVideoType(); // 'long' | 'short'
-  const aspectRatio = videoType === 'short' ? '9:16' : '16:9';
+  const videoType = state.videoType ?? await getVideoType();
+  const aspectRatio = getVideoConfig(videoType).aspectRatio;
   console.log(`  video_type=${videoType}, aspectRatio=${aspectRatio}`);
 
-  let { scenes, parentCardId } = state;
+  let { scenes } = state;
   // Prefer characterMap with reference image buffers if available
   const characterMap = state.characterMapWithImages ?? state.characterMap;
 
@@ -64,75 +65,125 @@ export async function runStage4(taskId, tracker, state = {}) {
     console.log(`  ↩️  Skipping ${doneScenes.size} already-illustrated scenes: ${[...doneScenes].join(', ')}`);
   }
 
-  // Sequential with 7s delay to stay within Imagen 10 req/min quota
-  const results = [];
+  // Image approval state
+  const approvedImages = state.approvedImages || {};
+  const feedbackMode = await isFeedbackCollectionMode();
+  let failureCount = 0;
+
+  // Generate + approve one scene at a time (7s delay between Imagen calls)
   for (const scene of scenes) {
-    if (doneScenes.has(scene.scene_number)) {
+    const sceneNum = scene.scene_number;
+
+    // Skip already-completed scenes (resume support)
+    if (doneScenes.has(sceneNum)) {
       const { data: asset } = await sb.from('scene_assets')
         .select('image_url')
         .eq('video_id', taskId)
-        .eq('scene_number', scene.scene_number)
+        .eq('scene_number', sceneNum)
         .single();
-      results.push({ status: 'fulfilled', value: { scene, imagePath: null, storagePath: asset?.image_url }, scene });
+      sceneImagePaths[sceneNum] = { imagePath: null, storagePath: asset?.image_url };
+      approvedImages[sceneNum] = { approved: true };
+      console.log(`  Scene ${sceneNum}: already illustrated — skipping`);
       continue;
     }
-    const result = await illustrateScene({ taskId, scene, characterMap, tmpDir, tracker, aspectRatio })
-      .then(val => ({ status: 'fulfilled', value: val, scene }))
-      .catch(err => ({ status: 'rejected', reason: err, scene }));
-    results.push(result);
-    if (result.status === 'fulfilled') {
-      await new Promise(r => setTimeout(r, 7000)); // ~8 req/min, safe under limit
+
+    // Skip already-approved images (resume support)
+    if (approvedImages[sceneNum]?.approved && sceneImagePaths[sceneNum]) {
+      console.log(`  Scene ${sceneNum}: image already approved — skipping`);
+      continue;
+    }
+
+    // Generate image for this scene
+    let result;
+    try {
+      result = await illustrateScene({ taskId, scene, characterMap, tmpDir, tracker, aspectRatio, state });
+      sceneImagePaths[sceneNum] = { imagePath: result.imagePath, storagePath: result.storagePath };
+    } catch (err) {
+      failureCount++;
+      console.warn(`  ⚠️  Scene ${sceneNum} failed: ${err.message}`);
+      await sendTelegramMessage(`⚠️ Manual asset needed: Scene ${sceneNum}\nError: ${err.message}\nUpload to: ${taskId}/scene_${String(sceneNum).padStart(2, '0')}_image.png`);
+      if (failureCount > MAX_SCENE_FAILURES) {
+        throw new Error(`Too many scene illustration failures (${failureCount}/${scenes.length})`);
+      }
+      continue;
+    }
+
+    // Approval loop for this scene
+    if (feedbackMode) {
+      let approved = false;
+      while (!approved) {
+        const entry = sceneImagePaths[sceneNum];
+
+        // Send image to Telegram
+        if (entry.imagePath) {
+          const caption = `Scene ${sceneNum} (${scene.speaker}, ${scene.emotion})\n${scene.visual_description?.slice(0, 200) || ''}`;
+          await sendApprovalBotMedia({ filePath: entry.imagePath, type: 'photo', caption });
+        }
+
+        // Send approve/reject buttons
+        const callbackPrefix = `s4_${sceneNum}`;
+        const telegramMessageId = await sendTelegramMessageWithButtons(
+          `🎨 Scene ${sceneNum}/${scenes.length} Image Review\nApprove or reject with feedback`,
+          callbackPrefix
+        );
+
+        const decision = await waitForTelegramResponse(telegramMessageId, callbackPrefix);
+
+        if (decision.approved) {
+          approvedImages[sceneNum] = { approved: true };
+          approved = true;
+          console.log(`  ✓ Scene ${sceneNum} image approved`);
+        } else {
+          console.log(`  ✗ Scene ${sceneNum} image rejected: ${decision.comment}`);
+          console.log(`  Regenerating scene ${sceneNum} with feedback...`);
+          const feedbackScene = decision.comment
+            ? { ...scene, visual_description: `${scene.visual_description}. Reviewer feedback: ${decision.comment}` }
+            : scene;
+          const regenerated = await illustrateScene({
+            taskId, scene: feedbackScene, characterMap, tmpDir, tracker, aspectRatio, state,
+          });
+          sceneImagePaths[sceneNum] = { imagePath: regenerated.imagePath, storagePath: regenerated.storagePath };
+        }
+
+        // Save state after each scene approval
+        await sb.from('video_pipeline_runs').upsert({
+          task_id: taskId,
+          stage: STAGE,
+          status: 'running',
+          pipeline_state: { ...state, sceneImagePaths, approvedImages },
+        }, { onConflict: 'task_id,stage' });
+      }
+    } else {
+      approvedImages[sceneNum] = { approved: true };
+    }
+
+    // 7s delay before next scene to stay within Imagen 10 req/min quota
+    if (scene !== scenes[scenes.length - 1]) {
+      await new Promise(r => setTimeout(r, 7000));
     }
   }
 
-  const failed = results.filter(r => r.status === 'rejected');
-
-  if (failed.length > MAX_SCENE_FAILURES) {
-    throw new Error(
-      `Too many scene illustration failures (${failed.length}/${scenes.length}). ` +
-      `Errors: ${failed.map(f => f.reason?.message).join('; ')}`
-    );
-  }
-
-  if (failed.length > 0) {
-    for (const f of failed) {
-      console.warn(`  ⚠️  Scene ${f.scene.scene_number} failed: ${f.reason?.message}`);
-      await createNexusCard({
-        title: `Manual asset needed: Scene ${f.scene.scene_number}`,
-        description: `Scene illustration failed: ${f.reason?.message}\nPlease upload a replacement 16:9 image to the scenes bucket.\nPath: ${taskId}/scene_${String(f.scene.scene_number).padStart(2, '0')}_image.png`,
-        task_type: 'stage_review',
-        priority: 'high',
-        parent_id: parentCardId,
-        stream: 'youtube',
-      });
-    }
-  }
-
-  // Collect successful image paths
-  for (const r of results) {
-    if (r.status === 'fulfilled') {
-      const { scene, imagePath, storagePath } = r.value;
-      sceneImagePaths[scene.scene_number] = { imagePath, storagePath };
-    }
-  }
-
-  // Feedback collection mode — review all images
-  if (await isFeedbackCollectionMode()) {
-    await feedbackReviewImages({ taskId, scenes, sceneImagePaths, parentCardId, sb });
-  }
+  // Bug 2 fix: persist tmpDir in pipeline_state so downstream stages (6, 7) can find local paths
+  const sb2 = getSupabase();
+  await sb2.from('video_pipeline_runs').upsert({
+    task_id: taskId,
+    stage: STAGE,
+    status: 'completed',
+    pipeline_state: { ...state, scenes, sceneImagePaths, approvedImages, tmpDir },
+  }, { onConflict: 'task_id,stage' });
 
   console.log(`✅ Stage 4 complete. ${Object.keys(sceneImagePaths).length}/${scenes.length} scenes illustrated`);
-  return { ...state, scenes, sceneImagePaths, tmpDir };
+  return { ...state, scenes, sceneImagePaths, approvedImages, tmpDir };
 }
 
-async function illustrateScene({ taskId, scene, characterMap, tmpDir, tracker, aspectRatio = '16:9' }) {
+async function illustrateScene({ taskId, scene, characterMap, tmpDir, tracker, aspectRatio = '16:9', state }) {
   // Look up primary character by scene.speaker
   const character = characterMap[scene.speaker]
     ?? characterMap[scene.speaker?.toUpperCase()]
     ?? characterMap['NARRATOR']
     ?? null;
 
-  const prompt = buildScenePrompt(scene, character);
+  const prompt = buildScenePrompt(scene, character, { aspectRatio, artStyle: state?.artStyle || '3D Pixar animation still' });
   console.log(`  Generating image for scene ${scene.scene_number} (${scene.speaker}/${scene.emotion}, ${aspectRatio})...`);
 
   // Collect reference image buffers from characters appearing in this scene
@@ -183,34 +234,3 @@ async function illustrateScene({ taskId, scene, characterMap, tmpDir, tracker, a
   return { scene, imagePath, storagePath };
 }
 
-async function feedbackReviewImages({ taskId, scenes, sceneImagePaths, parentCardId, sb }) {
-  console.log('  📋 Feedback collection mode: requesting image review...');
-
-  const signedUrls = {};
-  for (const [sceneNum, { storagePath }] of Object.entries(sceneImagePaths)) {
-    try {
-      signedUrls[sceneNum] = await getSceneImageUrl(taskId, parseInt(sceneNum));
-    } catch {
-      signedUrls[sceneNum] = storagePath;
-    }
-  }
-
-  const urlList = Object.entries(signedUrls)
-    .map(([n, url]) => `Scene ${n}: ${url}`)
-    .join('\n');
-
-  const cardId = await createNexusCard({
-    title: `[Feedback] Stage 4: Scene Images Review`,
-    description: [
-      `Feedback collection mode: Please review all scene images.`,
-      `\n**Images:**\n${urlList}`,
-      `\nApprove if all images look good, or Request Changes with specific scene feedback.`,
-    ].join('\n'),
-    task_type: 'stage_review',
-    priority: 'medium',
-    parent_id: parentCardId,
-    stream: 'youtube',
-  });
-
-  console.log(`  NEXUS image review card created: ${cardId} (non-blocking)`);
-}

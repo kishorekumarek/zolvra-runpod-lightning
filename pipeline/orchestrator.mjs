@@ -9,7 +9,9 @@ import { runStage5 } from '../stages/stage-05-animate.mjs';
 import { runStage6 } from '../stages/stage-06-voice.mjs';
 import { runStage7 } from '../stages/stage-07-assemble.mjs';
 import { runStage8 } from '../stages/stage-08-review.mjs';
-import { runStage9 } from '../stages/stage-09-publish.mjs';
+// Stage 9 removed from auto-chain (producer/publisher split).
+// YouTube upload now happens via scripts/publish-video.mjs on demand.
+// import { runStage9 } from '../stages/stage-09-publish.mjs';
 
 /**
  * Run the full pipeline for a given task_id, starting from the specified stage.
@@ -22,6 +24,8 @@ export async function runPipeline(taskId, startStage = 2) {
   const tracker = new CostTracker(taskId);
 
   // Map of stages with their runner functions
+  // Stage 9 excluded — pipeline ends after Stage 8 (Supabase queue).
+  // YouTube upload happens on demand via scripts/publish-video.mjs.
   const stageFns = {
     2: runStage2,
     3: runStage3,
@@ -30,7 +34,6 @@ export async function runPipeline(taskId, startStage = 2) {
     6: runStage6,
     7: runStage7,
     8: runStage8,
-    9: runStage9,
   };
 
   const stageNumbers = Object.keys(stageFns).map(Number).filter(n => n >= startStage);
