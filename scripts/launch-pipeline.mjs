@@ -14,6 +14,7 @@ import { runStage7 } from '../stages/stage-07-assemble.mjs';
 import { runStage8 } from '../stages/stage-08-review.mjs';
 import { runStage9 } from '../stages/stage-09-publish.mjs';
 import { flushApprovalUpdates, PipelineAbortError } from '../lib/telegram.mjs';
+import { STAGE_NUM_TO_ID } from '../lib/stage-ids.mjs';
 
 const [,, conceptTaskIdArg, startStageArg, taskIdArg] = process.argv;
 const conceptTaskId = conceptTaskIdArg || '13';
@@ -96,6 +97,7 @@ if (!taskId) {
   await sb.from('video_pipeline_runs').upsert({
     task_id: taskId,
     stage: 1,
+    stage_id: STAGE_NUM_TO_ID[1] ?? null,
     status: 'completed',
     started_at: new Date().toISOString(),
     completed_at: new Date().toISOString(),
@@ -106,6 +108,10 @@ console.log(`   Task ID:      ${taskId}\n`);
 
 const tracker = new CostTracker(taskId);
 
+// Stage execution order — explicit array to avoid JS integer key auto-sorting.
+// Order: script(2) → characters(3) → tts(6) → illustrate(4) → animate(5) → assemble(7) → queue(8) → publish(9)
+// TTS runs before illustration: audio approved before spending image gen + animation credits.
+const stageOrder = [2, 3, 6, 4, 5, 7, 8]; // Stage 9 removed — upload is on-demand via publish-video.mjs
 const stageFns = { 2: runStage2, 3: runStage3, 4: runStage4, 5: runStage5,
                    6: runStage6, 7: runStage7, 8: runStage8, 9: runStage9 };
 
@@ -128,14 +134,16 @@ if (startStage > 2) {
   }
 }
 
-for (const [stageNum, stageFn] of Object.entries(stageFns).map(([k,v]) => [parseInt(k,10), v])) {
+for (const stageNum of stageOrder) {
   if (stageNum < startStage) continue;
+  const stageFn = stageFns[stageNum];
 
   console.log(`\n━━━ Stage ${stageNum} ━━━`);
 
   await sb.from('video_pipeline_runs').upsert({
     task_id: taskId,
     stage: stageNum,
+    stage_id: STAGE_NUM_TO_ID[stageNum] ?? null,
     status: 'running',
     started_at: new Date().toISOString(),
   }, { onConflict: 'task_id,stage' });
@@ -148,19 +156,19 @@ for (const [stageNum, stageFn] of Object.entries(stageFns).map(([k,v]) => [parse
     const stateSnapshot = { ...pipelineState };
     delete stateSnapshot.taskId; // don't duplicate
     await sb.from('video_pipeline_runs')
-      .update({ status: 'completed', completed_at: new Date().toISOString(), pipeline_state: stateSnapshot })
+      .update({ status: 'completed', stage_id: STAGE_NUM_TO_ID[stageNum] ?? null, completed_at: new Date().toISOString(), pipeline_state: stateSnapshot })
       .eq('task_id', taskId).eq('stage', stageNum);
     console.log(`✅ Stage ${stageNum} complete`);
   } catch (err) {
     if (err instanceof PipelineAbortError) {
       await sb.from('video_pipeline_runs')
-        .update({ status: 'aborted', error: err.message, completed_at: new Date().toISOString() })
+        .update({ status: 'aborted', stage_id: STAGE_NUM_TO_ID[stageNum] ?? null, error: err.message, completed_at: new Date().toISOString() })
         .eq('task_id', taskId).eq('stage', stageNum);
       console.log(`\n🛑 Pipeline aborted at stage ${stageNum}: ${err.message}`);
       process.exit(0);
     }
     await sb.from('video_pipeline_runs')
-      .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
+      .update({ status: 'failed', stage_id: STAGE_NUM_TO_ID[stageNum] ?? null, error: err.message, completed_at: new Date().toISOString() })
       .eq('task_id', taskId).eq('stage', stageNum);
     console.error(`❌ Stage ${stageNum} failed: ${err.message}`);
     console.error('🛑 Pipeline halted');
