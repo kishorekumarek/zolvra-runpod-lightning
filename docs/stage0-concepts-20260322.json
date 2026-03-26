@@ -1,0 +1,72 @@
+[
+  {
+    "title": "Priya's Lunchbox Day",
+    "tamilTitle": "பிரியாவின் சாப்பாட்டு பெட்டி",
+    "theme": "identity",
+    "characters": [
+      "Priya (7-year-old Tamil girl)",
+      "Mia (classmate, non-Tamil girl)"
+    ],
+    "synopsis": "Priya is embarrassed when her classmate Mia points at her idli lunchbox and asks 'What IS that?' — she almost says it's just 'white pancakes.' But when Mia begs for a taste and loves it, Priya proudly teaches her the word 'idli' and explains it's from Tamil Nadu. The moral is that the things that make you different are the things that make you interesting.",
+    "targetDurationSeconds": 210,
+    "targetAge": "3-7",
+    "videoType": "long",
+    "hook": "Priya hid her lunchbox under the table — but Mia already smelled it."
+  },
+  {
+    "title": "Kani's New Year Morning",
+    "tamilTitle": "கனியின் புத்தாண்டு காலை",
+    "theme": "celebration",
+    "characters": [
+      "Kani (5-year-old Tamil boy)",
+      "Paati (grandfather's mother / great-grandmother)"
+    ],
+    "synopsis": "Kani wakes up on Puthandu and is told he must NOT open his eyes until Paati leads him to the kani tray — but curiosity gets the better of him and he sneaks one peek. When Paati gently explains that the first sight on Tamil New Year should be beautiful, auspicious things so the whole year stays sweet, Kani understands and they redo the ritual together properly. The warmth of the family tradition and the meaning behind every item on the kani tray is revealed joyfully through Kani's questions.",
+    "targetDurationSeconds": 300,
+    "targetAge": "3-7",
+    "videoType": "long",
+    "hook": "Kani was told ONE rule on New Year morning — keep your eyes shut. He lasted 4 seconds."
+  },
+  {
+    "title": "The Elephant Who Was Afraid of Rain",
+    "tamilTitle": "மழைக்கு பயந்த யானை",
+    "theme": "bravery",
+    "characters": [
+      "Gajaa (young elephant)",
+      "Mayil (peacock, best friend)"
+    ],
+    "synopsis": "Gajaa the little elephant loves everything about the jungle except the loud monsoon rain — the thunder makes him trumpet and hide behind the biggest tree every time. When a drought dries up the watering hole and the whole herd is thirsty, Gajaa must walk through a storm to find a new river he once spotted beyond the hill. He makes the journey, trembling but moving forward, and discovers that courage is not the absence of fear but taking the next step anyway.",
+    "targetDurationSeconds": 480,
+    "targetAge": "3-7",
+    "videoType": "long",
+    "hook": "The biggest animal in the jungle was scared of raindrops."
+  },
+  {
+    "title": "The Boy Who Said 'Not Me'",
+    "tamilTitle": "நான் இல்லை சொன்ன பையன்",
+    "theme": "honesty",
+    "characters": [
+      "Arjun (4-year-old boy)",
+      "Amma (mother)"
+    ],
+    "synopsis": "Arjun accidentally breaks Amma's favourite clay pot and blames the cat — but the cat cannot climb that shelf and Amma knows it. When Arjun sees how sad Amma looks — not about the pot but about not knowing the truth — he confesses, and Amma's smile comes back instantly. The moral lands in the final second: the pot was just clay, but the truth was the real treasure.",
+    "targetDurationSeconds": 58,
+    "targetAge": "3-7",
+    "videoType": "short",
+    "hook": "Arjun broke Amma's favourite pot — so he blamed the cat. The cat cannot even jump that high."
+  },
+  {
+    "title": "Avvaiyar's Big Question",
+    "tamilTitle": "ஔவையாரின் பெரிய கேள்வி",
+    "theme": "curiosity",
+    "characters": [
+      "Little Aadhya (5-year-old girl, framing character)",
+      "Avvaiyar (legendary Tamil poet, animated historical figure)"
+    ],
+    "synopsis": "Structured as a 'story within a story,' Aadhya asks her Thatha why Tamil is so old and he tells her about Avvaiyar — a brilliant woman poet who lived thousands of years ago and wrote wisdom that kids still memorise today. We see a short animated vignette of young Avvaiyar writing 'Aathichudi' lines under a lamp, explaining each one in modern colloquial Tamil as the words float off the page. The episode ends with Aadhya memorising her first Aathichudi line, connecting a 5-year-old in 2025 to a poet from ancient Tamil Nadu — making heritage feel alive and personal.",
+    "targetDurationSeconds": 360,
+    "targetAge": "3-7",
+    "videoType": "long",
+    "hook": "A girl who lived 2000 years ago wrote the words your Paati still says to you every morning."
+  }
+]

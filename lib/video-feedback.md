@@ -4,16 +4,13 @@
 ---
 
 ## Character Rules
-- Peacock character name: **Kavin** (not Paandi)
-- First mention of any character: always pair name + animal type
-  - "Kavin, peacock," (comma after each)
-  - "Kitti, kili," (kili = parrot in Tamil)
-  - "Valli, kuruvi," (kuruvi = small bird)
-- "Children" in story = small sparrows/birds — NEVER human children
+- Characters come from the character_library in Supabase — each story uses its own cast
+- First mention of any character: always pair name + identity (species, role, or key trait)
 - Introduce ALL characters in the first 5 scenes — no characters appearing from nowhere
+- Use the character's locked description from the library for visual_description — never just a name
 
 ## Tamil Language Rules
-- **Romanized only** — no Tamil Unicode script characters ever
+- **Tamil script (Unicode)** — write dialogue in Tamil Unicode, English loanwords can stay in English
 - **Avoid ழ words**: mazhai→rain, azhaga→pretty/beautiful, ezhunthaan→veliye vanthaan, vazhi→road/way
 - **Colloquial contractions**: irukulla (not irukku illa), solluven (not sollugiRen), poyitaan (not poyinaar)
 - **No literary openings**: no "oru X naal" style — start warm and direct
@@ -68,7 +65,7 @@ The pipeline must STOP after Stage 2 and wait for Darl's script approval before 
 
 ## Script Generation Rules
 - Exactly 24 scenes per video
-- Each scene text: 20-30 romanized words → fills ~8-9 seconds spoken
+- Each scene text: 20-30 Tamil script words → fills ~8-9 seconds spoken
 - Story arc: scenes 1-5 intro, 6-14 rising action, 15-20 climax, 21-24 resolution
 - Environment tag per scene: forest_day / forest_rain / river / night / sky / crowd_children
 
@@ -98,16 +95,13 @@ Imagen generates each image independently. Without exact repeated character desc
 - Character sheet lives in Stage 1 concept output and is passed to Stage 2
 
 ## Visual Description Rules (CRITICAL)
-- Always name the exact animal species — never "character" or "friend"
-  - ✅ "a colorful peacock with spread fan tail feathers"
-  - ✅ "a bright green parrot with expressive eyes"
-  - ✅ "a small brown bulbul songbird"
-  - ✅ "three tiny sparrows perched on a branch"
-  - ❌ "Kavin and his friends" (too vague)
-  - ❌ "children watching" (generates human children)
+- Always use the character's full physical description from character_library — never just a name or vague label
+  - ✅ "a 5-year-old Tamil girl with golden-brown skin, short bob-cut black hair with pink clip, playing a bamboo flute"
+  - ✅ "a colorful peacock with spread fan tail feathers in a sunny clearing"
+  - ❌ "Meenu and her friends" (too vague — Imagen needs physical details)
+  - ❌ "character watching" (no identity)
 - Describe the exact action happening in the scene
 - Include: lighting, environment, mood
-- All characters are ANIMALS — no humans ever
 
 ## Resolution Rules (LOCKED — 2026-03-15)
 - ALL videos must be 1280x720 (16:9) — no square videos ever on YouTube

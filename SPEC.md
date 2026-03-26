@@ -1,8 +1,13 @@
 # YouTube AI Content Pipeline — Technical Specification
 ## @tinytamiltales — Tamil Kids Animated Stories
 
-**Author:** Rex (Research & Strategy Agent, Zolvra)  
-**Version:** 1.0.0  
+> **⚠️ STALE — This spec was written for long-form 16:9 videos with ElevenLabs v2 and Kling.**
+> **Current pipeline uses: Wan 2.6 animation, ElevenLabs v3 (no SSML, empty voice_settings), supports both Shorts (9:16, 8 scenes) and Long-form (16:9, 24 scenes).**
+> **NEXUS (ops_tasks board) has been removed — all approvals now go through Telegram via Heimdall bot. Some code samples below still reference NEXUS; these are historical and do not reflect the current pipeline.**
+> **For current truth, see `MEMORY.md` → YouTube Pipeline Learnings & Playbook.**
+
+**Author:** Rex (Research & Strategy Agent, Zolvra)
+**Version:** 1.0.0 (OUTDATED)
 **Date:** 2026-03-12  
 **Status:** Ready for Ash to build
 
@@ -20,7 +25,7 @@
 8. [Error Handling & Retry Logic](#8-error-handling--retry-logic)
 9. [Directory Structure](#9-directory-structure)
 10. [First-N-Videos Feedback Collection Mode](#10-first-n-videos-feedback-collection-mode)
-11. [NEXUS Integration](#11-nexus-integration)
+11. [Telegram Approval Integration](#11-telegram-approval-integration)
 12. [Environment Variables](#12-environment-variables)
 
 ---
@@ -31,15 +36,15 @@
 
 | Stage | Name | Trigger | Output | Human Gate? |
 |-------|------|---------|--------|-------------|
-| 0 | Weekly Research | Cron (Mon 08:00 GST) | 3–5 story concepts in NEXUS | No |
-| 1 | Concept Selection | Darl picks on NEXUS | Approved concept → pipeline_runs row | ✅ Darl |
-| 2 | Script Generation | Stage 1 complete | JSON script in NEXUS for review | ✅ Darl |
+| 0 | Weekly Research | Cron (Mon 08:00 GST) | 3–5 story concepts via Telegram | No |
+| 1 | Concept Selection | Darl picks via Telegram | Approved concept → pipeline_runs row | ✅ Darl |
+| 2 | Script Generation | Stage 1 complete | JSON script via Telegram for review | ✅ Darl |
 | 3 | Character Prep | Stage 2 approved | Characters confirmed from library | No (auto, unless missing) |
 | 4 | Scene Illustration | Stage 3 complete | 1 image per scene in Supabase Storage | No (auto) |
 | 5 | Animation | Stage 4 complete | 1 video clip per scene | No (auto) |
 | 6 | Tamil Voice (TTS) | Stage 5 complete | Audio files per scene (2 takes) | No (auto) |
 | 7 | Assembly | Stage 6 complete | Final MP4 via ffmpeg | No (auto) |
-| 8 | Human Review | Stage 7 complete | NEXUS card for Darl review | ✅ Darl |
+| 8 | Human Review | Stage 7 complete | Telegram notification for Darl review | ✅ Darl |
 | 9 | Feedback + Publish | Stage 8 approved | Video published to YouTube | ✅ Final confirmation |
 
 ### Pipeline State Machine
@@ -50,7 +55,7 @@
             [FAILED]                           [REJECTED] → [RUNNING] (retry with feedback)
 ```
 
-Each stage is a discrete unit tracked in `video_pipeline_runs`. The orchestrator polls NEXUS for human approval signals before advancing.
+Each stage is a discrete unit tracked in `video_pipeline_runs`. The pipeline waits for Telegram approval signals (via Heimdall bot) before advancing.
 
 ---
 
@@ -1165,19 +1170,19 @@ streams/youtube/
 │
 ├── pipeline/
 │   ├── orchestrator.mjs              # Main entry point. Runs all stages in sequence.
-│   ├── nexus-client.mjs              # NEXUS board API wrapper
+│   ├── nexus-client.mjs              # (legacy, unused — kept as dead code)
 │   └── state.mjs                     # Load/save pipeline state for a given task_id
 │
 ├── stages/
 │   ├── stage-00-research.mjs         # Weekly cron: trends → story concepts
-│   ├── stage-01-concept-select.mjs   # Wait for NEXUS approval, emit task_id
-│   ├── stage-02-script-gen.mjs       # Claude API → JSON script → NEXUS review
+│   ├── stage-01-concept-select.mjs   # Concept approval, emit task_id
+│   ├── stage-02-script-gen.mjs       # Claude API → JSON script → Telegram review
 │   ├── stage-03-character-prep.mjs   # Resolve characters from library
 │   ├── stage-04-illustrate.mjs       # Scene image generation via Google AI
 │   ├── stage-05-animate.mjs          # Kling image-to-video per scene
 │   ├── stage-06-voice.mjs            # ElevenLabs TTS per line
 │   ├── stage-07-assemble.mjs         # ffmpeg assembly
-│   ├── stage-08-review.mjs           # Upload unlisted, await NEXUS approval
+│   ├── stage-08-review.mjs           # Upload unlisted, notify via Telegram
 │   └── stage-09-publish.mjs          # Publish to YouTube, feedback loop
 │
 ├── lib/
@@ -1259,7 +1264,7 @@ export async function runPipeline(taskId, startStage = 2) {
 
 ### 10.1 What it is
 
-For the first 10 videos, **every automated stage goes to NEXUS for human review**, even stages that would normally be fully automated (Stages 3, 4, 5, 6, 7). This builds the feedback dataset needed to calibrate the system before trusting automation.
+For the first 10 videos, **every automated stage sends assets to Telegram for human review**, even stages that would normally be fully automated (Stages 3, 4, 5, 6, 7). This builds the feedback dataset needed to calibrate the system before trusting automation.
 
 ### 10.2 Settings Keys
 
@@ -1286,23 +1291,19 @@ In each automated stage (3–7), wrap the stage output in a human gate:
 ```javascript
 // In each stage file, after generating the asset:
 if (await isFeedbackCollectionMode()) {
-  await createNexusReviewCard({
-    taskId,
-    stage: STAGE_NUMBER,
-    assetUrl: signedUrl,
-    promptUsed: prompt,
-    description: `Feedback collection mode: Review this stage ${STAGE_NUMBER} output. Approve or deny with comment.`
-  });
-
-  const decision = await awaitNexusDecision(taskId, `stage_${STAGE_NUMBER}`);
+  // Send asset to Telegram for review
+  const callbackPrefix = `s${STAGE_NUMBER}_${sceneNumber}`;
+  const telegramMessageId = await sendTelegramMessageWithButtons(
+    `Stage ${STAGE_NUMBER} review: Scene ${sceneNumber}`,
+    callbackPrefix
+  );
+  const decision = await waitForTelegramResponse(telegramMessageId, callbackPrefix);
 
   await supabase.from("pipeline_feedback").insert({
     video_id:    taskId,
     stage:       STAGE_NUMBER,
-    character_id: characterId ?? null,
     scene_number: sceneNumber ?? null,
     prompt_used: prompt,
-    asset_url:   assetUrl,
     decision:    decision.approved ? "approved" : "denied",
     comment:     decision.comment ?? null
   });
@@ -1331,19 +1332,13 @@ if (next >= target && await getSetting("feedback_collection_mode") === true) {
   // Run feedback analysis on all collected data
   await runBatchFeedbackAnalysis();
 
-  await createNexusCard({
-    title: "🎓 Feedback Collection Complete!",
-    description: `${target} videos reviewed. System is now switching to automated quality gates. Review the improvement report.`,
-    type: "milestone"
-  });
-
-  execSync(`openclaw system event --text "Feedback collection complete: ${target} videos. Switching to auto mode." --mode now`);
+  await sendTelegramMessage(`🎓 Feedback collection complete! ${target} videos reviewed. Switching to automated quality gates.`);
 }
 ```
 
 ### 10.5 Automated Quality Gates (Post Feedback Collection)
 
-Once `feedback_collection_mode = false`, stages 3–7 use these automated gates instead of NEXUS review:
+Once `feedback_collection_mode = false`, stages 3–7 use these automated gates instead of Telegram review:
 
 | Stage | Automated Gate |
 |-------|---------------|
@@ -1357,135 +1352,37 @@ Only Stages 1, 2, and 8 remain human-gated permanently.
 
 ---
 
-## 11. NEXUS Integration
+## 11. Telegram Approval Integration
 
-### 11.1 NEXUS Board Cards
+> **Note:** NEXUS (ops_tasks board) has been removed from the pipeline. All approvals now go through Telegram via Heimdall bot.
 
-> **Important:** NEXUS is a Next.js frontend that reads/writes Supabase directly — there is NO separate NEXUS REST API.
-> The pipeline creates and polls cards by writing directly to `ops_tasks` in Supabase using the service role key.
+### 11.1 Approval Flow
+
+The pipeline uses `waitForTelegramResponse()` from `lib/telegram.mjs` for all blocking approvals:
 
 ```javascript
-// lib/nexus-client.mjs
-// NEXUS = direct Supabase ops_tasks writes. No separate API needed.
+// Send approve/reject buttons
+const callbackPrefix = `s2_${sceneNum}`;
+const telegramMessageId = await sendTelegramMessageWithButtons(msg, callbackPrefix);
 
-import { createClient } from '@supabase/supabase-js';
-const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-
-/**
- * Create a NEXUS card for human review.
- * parent_id links this child card to the video's parent card.
- * task_type controls visual badge in NEXUS Review column.
- * auto_created = true means it skips the Backlog → Todo flow.
- * status = 'review' means it lands directly in the Review column.
- */
-export async function createNexusCard({
-  title,
-  description,
-  task_type,        // 'script_proposal' | 'character_proposal' | 'video_delivery' | 'story_proposal'
-  priority = 'medium',
-  parent_id,        // UUID of the video_parent ops_tasks row
-  content_url,      // link shown as 'View Content' button in NEXUS
-  stream = 'youtube',
-}) {
-  const { data, error } = await sb
-    .from('ops_tasks')
-    .insert({
-      title,
-      description,
-      task_type,
-      priority,
-      parent_id: parent_id || null,
-      content_url: content_url || null,
-      stream,
-      status: 'review',
-      auto_created: true,
-    })
-    .select('id')
-    .single();
-
-  if (error) throw new Error(`createNexusCard failed: ${error.message}`);
-  return data.id; // card ID for polling
-}
-
-/**
- * Create the parent video card (shows progress timeline in NEXUS).
- * Returns the parent_id to be passed to all child cards.
- */
-export async function createVideoParentCard({ title, stream = 'youtube' }) {
-  const { data, error } = await sb
-    .from('ops_tasks')
-    .insert({
-      title,
-      task_type: 'video_parent',
-      stream,
-      status: 'in_progress',
-      auto_created: true,
-    })
-    .select('id')
-    .single();
-
-  if (error) throw new Error(`createVideoParentCard failed: ${error.message}`);
-  return data.id;
-}
-
-/**
- * Poll ops_tasks for a human decision.
- * NEXUS sets status = 'done' (approved) or keeps in 'review' with feedback comment.
- * The Approve button in NEXUS sets status = 'done'.
- * Request Changes keeps status = 'review' and appends to comments JSONB.
- */
-export async function awaitNexusDecision(cardId, timeoutMs = 86400000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const { data } = await sb
-      .from('ops_tasks')
-      .select('status, comments')
-      .eq('id', cardId)
-      .single();
-
-    if (data?.status === 'done') {
-      return { approved: true, comment: null };
-    }
-
-    // Check for new 'Request Changes' comment since last poll
-    const comments = data?.comments || [];
-    const latestComment = comments[comments.length - 1];
-    if (latestComment?.type === 'request_changes') {
-      return { approved: false, comment: latestComment.text };
-    }
-
-    await sleep(30000); // poll every 30s
-  }
-  throw new Error(`NEXUS card ${cardId} timed out after ${timeoutMs}ms`);
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Block until Darl responds (long-poll, 24h timeout)
+const decision = await waitForTelegramResponse(telegramMessageId, callbackPrefix);
+// → { approved: true, comment: null }
+// → { approved: false, comment: "feedback text" }
 ```
 
-### 11.2 Card type → NEXUS stage mapping
+### 11.2 Stage → Telegram mapping
 
-| Pipeline stage | task_type | NEXUS badge | When created |
-|---|---|---|---|
-| Stage 0 (story concepts) | `story_proposal` | Story Idea (purple) | Monday cron, 3–5 cards |
-| Stage 2 (script review) | `script_proposal` | Script Review (blue) | After script generated |
-| Stage 3 (new character) | `character_proposal` | Character Review (orange) | Per new character |
-| Stage 8 (final video) | `video_delivery` | Video Ready (green) | After assembly |
-| Parent (whole video) | `video_parent` | — (shows timeline) | At Stage 1 concept approval |
-
-### 11.3 comments JSONB schema
-
-Comments on cards use this structure for the array elements:
-
-```json
-{
-  "author": "darl" | "friday",
-  "type": "comment" | "request_changes" | "system",
-  "text": "string",
-  "timestamp": "ISO8601"
-}
-```
-
-The pipeline reads `type === 'request_changes'` to detect a change request from Darl.
+| Pipeline stage | Telegram message type | When sent |
+|---|---|---|
+| Stage 0 (story concepts) | Text message (concept summary) | Monday cron, 3–5 messages |
+| Stage 2 (script review) | Buttons (approve/reject per scene) | After script generated |
+| Stage 3 (missing char) | Text message (escalation) | Per missing character |
+| Stage 4 (image review) | Photo + buttons (feedback mode) | Per scene image |
+| Stage 5 (anim review) | Video + buttons (feedback mode) | Per scene animation |
+| Stage 6 (voice review) | Audio + buttons (feedback mode) | Per scene voice |
+| Stage 8 (final video) | Text message (YouTube URL) | After upload |
+| Stage 9 (published) | Text message (milestone) | After publish |
 
 ---
 
@@ -1518,8 +1415,6 @@ PIXABAY_API_KEY=...
 # Claude (for script gen + feedback engine)
 ANTHROPIC_API_KEY=...
 
-# NEXUS
-# NEXUS = direct Supabase access, no separate API needed (uses SUPABASE_SERVICE_ROLE_KEY above)
 ```
 
 ---

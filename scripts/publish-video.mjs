@@ -141,22 +141,20 @@ async function main() {
     queueRow = data;
   }
 
-  const { task_id: taskId, title, video_type: videoType, supabase_video_path, youtube_seo } = queueRow;
+  const { task_id: taskId, title, video_type: videoType, local_video_path: localVideoPath, youtube_seo } = queueRow;
   console.log(`\n🎬 Publishing: ${title}`);
   console.log(`   task_id:    ${taskId}`);
   console.log(`   video_type: ${videoType}`);
-  console.log(`   storage:    ${supabase_video_path}`);
+  console.log(`   local path: ${localVideoPath}`);
   console.log();
 
-  // ── 2. Download video from Supabase ─────────────────────────────────────────
-  const tmpVideoPath = join(tmpdir(), `publish_${taskId}.mp4`);
-  console.log(`  ⬇️  Downloading from Supabase...`);
+  // ── 2. Verify local video file exists ───────────────────────────────────────
+  const tmpVideoPath = localVideoPath; // use local path directly — no download needed
   try {
-    const buffer = await downloadFromStorage({ bucket: BUCKETS.videos, path: supabase_video_path });
-    await fs.writeFile(tmpVideoPath, buffer);
-    console.log(`  ✓ Downloaded (${(buffer.length / 1024 / 1024).toFixed(1)}MB) → ${tmpVideoPath}`);
+    const stat = await fs.stat(tmpVideoPath);
+    console.log(`  ✓ Video found locally (${(stat.size / 1024 / 1024).toFixed(1)}MB)`);
   } catch (err) {
-    console.error(`❌ Failed to download video: ${err.message}`);
+    console.error(`❌ Video file not found at ${tmpVideoPath}: ${err.message}`);
     process.exit(1);
   }
 
@@ -178,7 +176,6 @@ async function main() {
     console.error(`❌ YouTube upload failed: ${err.message}`);
     // Mark as failed in queue
     await sb.from('video_queue').update({ status: 'failed' }).eq('task_id', taskId);
-    await fs.unlink(tmpVideoPath).catch(() => {});
     process.exit(1);
   }
 
@@ -221,9 +218,7 @@ async function main() {
     `Make public via YouTube Studio when ready 🚀`
   ).catch(err => console.warn(`  ⚠️  Telegram notify failed: ${err.message}`));
 
-  // ── 8. Clean up /tmp/ ────────────────────────────────────────────────────────
-  await fs.unlink(tmpVideoPath).catch(() => {});
-  console.log('  🧹 Temp file cleaned up');
+  // Local file is kept — it's in the persistent output folder, not /tmp/
 
   console.log(`\n🎉 Done! https://youtu.be/${youtubeVideoId}\n`);
 }

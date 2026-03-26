@@ -12,7 +12,7 @@ import {
   sendTelegramMessageWithCustomButtons, waitForTelegramMultiResponse,
 } from '../lib/telegram.mjs';
 import { generateSceneImage } from '../lib/image-gen.mjs';
-import { uploadCharacterImage, uploadEpisodeCharacterImage, downloadFromStorage, BUCKETS } from '../lib/storage.mjs';
+import { uploadCharacterImage, uploadEpisodeCharacterImage, uploadToStorage, downloadFromStorage, BUCKETS } from '../lib/storage.mjs';
 import { callClaude } from '../../shared/claude.mjs';
 import { pickVoiceFromPool } from '../lib/voice-config.mjs';
 
@@ -457,6 +457,19 @@ Return ONLY JSON. No markdown. No explanation.
             console.log(`  ✓ ${name}: reference image approved + cached (v${charVersion})`);
           } catch (uploadErr) {
             console.warn(`  ⚠️  ${name}: approved but cache upload failed: ${uploadErr.message}`);
+          }
+          // Upload task-specific reference image and record URL in character_library (non-fatal)
+          try {
+            const refStoragePath = await uploadToStorage({
+              bucket: BUCKETS.characters,
+              path: `${taskId}/${name}_ref.png`,
+              buffer,
+              contentType: 'image/png',
+            });
+            await supabase.from('character_library').update({ reference_image_url: refStoragePath }).eq('name', name);
+            console.log(`  ✓ ${name}: reference_image_url saved to character_library (${refStoragePath})`);
+          } catch (refErr) {
+            console.warn(`  ⚠️  ${name}: reference_image_url update failed (non-fatal): ${refErr.message}`);
           }
           imageApproved = true;
           break;

@@ -54,7 +54,7 @@ node scripts/test-connections.mjs
 node stages/stage-00-research.mjs
 ```
 
-### 6. Start pipeline (after concept approved in NEXUS)
+### 6. Start pipeline (after concept approved)
 ```bash
 node scripts/run-pipeline.mjs <task_id> [start_stage]
 ```
@@ -69,21 +69,21 @@ streams/youtube/
 │   └── orchestrator.mjs        # Main entry — runs all stages in sequence
 ├── stages/
 │   ├── stage-00-research.mjs   # Weekly cron: trends → story concepts
-│   ├── stage-01-concept-select.mjs  # Wait for NEXUS approval, emit task_id
-│   ├── stage-02-script-gen.mjs      # Claude API → JSON script → NEXUS review
+│   ├── stage-01-concept-select.mjs  # Concept approval, emit task_id
+│   ├── stage-02-script-gen.mjs      # Claude API → JSON script → Telegram review
 │   ├── stage-03-character-prep.mjs  # Resolve characters from library
 │   ├── stage-04-illustrate.mjs      # Scene images via Google AI Imagen
 │   ├── stage-05-animate.mjs         # Kling image-to-video per scene
 │   ├── stage-06-voice.mjs           # ElevenLabs TTS per line
 │   ├── stage-07-assemble.mjs        # ffmpeg assembly
-│   ├── stage-08-review.mjs          # Upload unlisted, await NEXUS approval
+│   ├── stage-08-review.mjs          # Upload unlisted, notify via Telegram
 │   └── stage-09-publish.mjs         # Publish to YouTube + feedback loop
 ├── lib/
 │   ├── supabase.mjs            # Supabase client singleton
 │   ├── settings.mjs            # getSetting() / setSetting()
 │   ├── cost-tracker.mjs        # CostTracker class + BudgetCapExceededError
 │   ├── retry.mjs               # withRetry() with exponential backoff
-│   ├── nexus-client.mjs        # NEXUS board via Supabase ops_tasks
+│   ├── nexus-client.mjs        # (legacy — unused, kept as dead code)
 │   ├── image-gen.mjs           # Google AI Imagen wrapper
 │   ├── motion-params.mjs       # Kling motion type → params
 │   ├── kling.mjs               # Kling API wrapper + polling
@@ -111,23 +111,22 @@ streams/youtube/
 
 ---
 
-## NEXUS Integration
+## Telegram Approval
 
-NEXUS is the Zolvra operations board. The pipeline writes directly to `ops_tasks` in Supabase — no separate API.
+All pipeline approvals go through Telegram via Heimdall (dedicated approval bot with long-polling). The bot sends approve/reject buttons for each scene or asset, and `waitForTelegramResponse()` blocks until Darl responds.
 
-**Card types:**
-- `story_proposal` — Stage 0 story concept (Darl picks one)
-- `script_proposal` — Stage 2 script (Darl approves)
-- `character_proposal` — New character request or prompt update
-- `video_delivery` — Stage 8 final video for review
-- `video_parent` — Parent card showing production progress
-- `stage_review` — Feedback collection mode review card
+**Approval surfaces:**
+- Stage 2: Per-scene script approval (Telegram buttons)
+- Stage 4: Per-scene image approval (Telegram photo + buttons, feedback mode)
+- Stage 5: Per-scene animation approval (Telegram video + buttons, feedback mode)
+- Stage 6: Per-scene voice approval (Telegram audio + buttons, feedback mode)
+- Stage 8: YouTube upload notification (Telegram message)
 
 ---
 
 ## Feedback Collection Mode
 
-For the **first 10 videos**, every automated stage (3–7) goes to NEXUS for Darl's review. This builds the dataset to calibrate the AI systems.
+For the **first 10 videos**, every automated stage (3–7) sends assets to Telegram for Darl's review. This builds the dataset to calibrate the AI systems.
 
 After 10 videos, stages 3–7 run automatically with quality gates. Stages 1, 2, and 8 remain human-gated **permanently**.
 
@@ -156,7 +155,7 @@ Never override the hard cap — it exists to protect from runaway API costs.
 See `.env.example` for all required variables.
 
 Key services:
-- **Supabase** — Database + Storage + NEXUS board
+- **Supabase** — Database + Storage
 - **Google AI** — Scene image generation (Imagen)
 - **kie.ai** — Kling video animation
 - **ElevenLabs** — Tamil TTS (multilingual v2)

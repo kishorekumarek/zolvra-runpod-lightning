@@ -1,19 +1,24 @@
-// stages/stage-08-review.mjs — Finalize + store in Supabase video_queue (no YouTube upload)
-// Producer stage: upload final video + thumbnail to Supabase, insert into video_queue,
-// send Telegram preview. YouTube upload happens separately via scripts/publish-video.mjs.
+// stages/stage-08-review.mjs — Finalize + store locally in video_queue (no YouTube upload)
+// Producer stage: copy final video to persistent local output folder, insert into video_queue,
+// send Telegram notification. YouTube upload happens separately via scripts/publish-video.mjs.
 import 'dotenv/config';
 import { promises as fs } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { getSupabase } from '../lib/supabase.mjs';
 import { getVideoType } from '../lib/settings.mjs';
 import { sendTelegramMessage } from '../lib/telegram.mjs';
-import { uploadToStorage, getSignedUrl, BUCKETS } from '../lib/storage.mjs';
 
 const STAGE = 8;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// Persistent output folder — survives /tmp cleanup
+const OUTPUT_DIR = join(__dirname, '..', 'output');
 
 /**
- * Stage 8: Upload final video (and thumbnail if present) to Supabase `videos` bucket,
- * insert a row into `video_queue`, notify Telegram with a signed URL preview.
+ * Stage 8: Copy final video to persistent local output folder,
+ * insert a row into `video_queue`, notify Telegram.
  * Does NOT upload to YouTube — that happens via publish-video.mjs on demand.
+ * Storage: local filesystem (streams/youtube/output/{taskId}/final.mp4)
  */
 export async function runStage8(taskId, tracker, state = {}) {
   console.log('📦 Stage 8: Finalize + store in video queue...');
@@ -25,37 +30,28 @@ export async function runStage8(taskId, tracker, state = {}) {
   const sb = getSupabase();
   const videoType = state.videoType ?? await getVideoType();
 
-  // ── 1. Upload final video to Supabase `videos` bucket ───────────────
-  console.log('  ⬆️  Uploading final video to Supabase...');
-  const videoBuffer = await fs.readFile(finalVideoPath);
-  const supabaseVideoPath = `${taskId}/final.mp4`;
-  await uploadToStorage({
-    bucket: BUCKETS.videos,
-    path: supabaseVideoPath,
-    buffer: videoBuffer,
-    contentType: 'video/mp4',
-  });
-  console.log(`  ✓ Video uploaded: videos/${supabaseVideoPath}`);
+  // ── 1. Copy final video to persistent local output folder ───────────
+  const outputDir = join(OUTPUT_DIR, taskId);
+  await fs.mkdir(outputDir, { recursive: true });
+  const localVideoPath = join(outputDir, 'final.mp4');
+  console.log(`  💾 Saving to persistent storage: ${localVideoPath}`);
+  await fs.copyFile(finalVideoPath, localVideoPath);
+  console.log(`  ✓ Video saved (${((await fs.stat(localVideoPath)).size / 1024 / 1024).toFixed(1)}MB)`);
 
-  // ── 2. Upload thumbnail if present ──────────────────────────────────
-  let supabaseThumbnailPath = null;
+  // ── 2. Copy thumbnail if present ────────────────────────────────────
+  let localThumbnailPath = null;
   if (thumbnailPath) {
     try {
-      const thumbBuffer = await fs.readFile(thumbnailPath);
-      supabaseThumbnailPath = `${taskId}/thumbnail.jpg`;
-      await uploadToStorage({
-        bucket: BUCKETS.videos,
-        path: supabaseThumbnailPath,
-        buffer: thumbBuffer,
-        contentType: 'image/jpeg',
-      });
-      console.log(`  ✓ Thumbnail uploaded: videos/${supabaseThumbnailPath}`);
+      localThumbnailPath = join(outputDir, 'thumbnail.jpg');
+      await fs.copyFile(thumbnailPath, localThumbnailPath);
+      console.log(`  ✓ Thumbnail saved`);
     } catch (err) {
-      console.warn(`  ⚠️  Thumbnail upload failed (non-fatal): ${err.message}`);
-      supabaseThumbnailPath = null;
+      console.warn(`  ⚠️  Thumbnail copy failed (non-fatal): ${err.message}`);
+      localThumbnailPath = null;
     }
   }
 
+  // Stub for compatibility (no Supabase path needed)
   // ── 3. Insert into video_queue ───────────────────────────────────────
   const title = script.youtube_seo?.title || script.metadata?.title || `Episode ${taskId.slice(0, 8)}`;
   const youtubeSeо = script.youtube_seo || {};
@@ -64,21 +60,20 @@ export async function runStage8(taskId, tracker, state = {}) {
     task_id:                  taskId,
     title,
     video_type:               videoType,
-    supabase_video_path:      supabaseVideoPath,
-    supabase_thumbnail_path:  supabaseThumbnailPath,
+    local_video_path:         localVideoPath,   // local filesystem path
+    supabase_thumbnail_path:  localThumbnailPath,
     youtube_seo:              youtubeSeо,
     status:                   'ready',
   });
 
   if (insertErr) {
-    // On conflict (already queued), update instead
     if (insertErr.message?.includes('unique') || insertErr.code === '23505') {
       console.warn('  ℹ️  video_queue row already exists — updating...');
       await sb.from('video_queue').update({
         title,
         video_type:               videoType,
-        supabase_video_path:      supabaseVideoPath,
-        supabase_thumbnail_path:  supabaseThumbnailPath,
+        local_video_path:         localVideoPath,
+        supabase_thumbnail_path:  localThumbnailPath,
         youtube_seo:              youtubeSeо,
         status:                   'ready',
       }).eq('task_id', taskId);
@@ -88,25 +83,12 @@ export async function runStage8(taskId, tracker, state = {}) {
   }
   console.log(`  ✓ video_queue row inserted (status=ready, type=${videoType})`);
 
-  // ── 4. Get signed URL for Telegram preview ──────────────────────────
-  let previewUrl = '';
-  try {
-    previewUrl = await getSignedUrl({
-      bucket: BUCKETS.videos,
-      path: supabaseVideoPath,
-      expiresInSeconds: 86400, // 24h
-    });
-  } catch (err) {
-    console.warn(`  ⚠️  Could not generate signed URL: ${err.message}`);
-    previewUrl = '(signed URL unavailable)';
-  }
-
-  // ── 5. Notify Telegram ───────────────────────────────────────────────
+  // ── 4. Notify Telegram ───────────────────────────────────────────────
   const durationStr = finalDurationSeconds ? `${finalDurationSeconds.toFixed(1)}s` : '?';
   await sendTelegramMessage(
     `🎬 ${title} ready for review!\n\n` +
-    `📦 Stored in Supabase (${videoType}, ${durationStr})\n` +
-    `🔗 Preview (24h): ${previewUrl}\n\n` +
+    `📁 Saved locally (${videoType}, ${durationStr})\n` +
+    `📂 ${localVideoPath}\n\n` +
     `Run \`node scripts/publish-video.mjs ${taskId}\` to upload to YouTube.`
   );
 
@@ -120,8 +102,8 @@ export async function runStage8(taskId, tracker, state = {}) {
 
   return {
     ...state,
-    supabaseVideoPath,
-    supabaseThumbnailPath,
+    localVideoPath,
+    localThumbnailPath,
     queueStatus: 'ready',
   };
 }

@@ -6,7 +6,7 @@ import { join } from 'path';
 import { getSupabase } from '../lib/supabase.mjs';
 import { isFeedbackCollectionMode, getVideoType } from '../lib/settings.mjs';
 import { generateSceneImage, buildScenePrompt, estimateImageCost } from '../lib/image-gen.mjs';
-import { uploadSceneImage, getSceneImageUrl, BUCKETS } from '../lib/storage.mjs';
+import { uploadSceneImage, getSceneImageUrl, downloadFromStorage, BUCKETS } from '../lib/storage.mjs';
 import { createTmpDir } from '../lib/ffmpeg.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { calcImageCost } from '../lib/cost-tracker.mjs';
@@ -55,6 +55,43 @@ export async function runStage4(taskId, tracker, state = {}) {
   const tmpDir = await createTmpDir(taskId);
   const sceneImagePaths = {};
 
+  // Hydrate characterMap with reference image buffers from Supabase Storage (BUG 1 fix).
+  // Stage 3 stores reference_image_url in character_library after approval.
+  // We download those buffers here so illustrateScene() can pass them to generateSceneImage().
+  // All errors are non-fatal — generation will proceed without reference images if download fails.
+  for (const [name, character] of Object.entries(characterMap)) {
+    if (character.referenceImageBuffer) continue; // already loaded (from this run or state)
+
+    // Check DB for reference_image_url if not already on the character object
+    let refUrl = character.reference_image_url;
+    if (!refUrl) {
+      try {
+        const { data: dbChar } = await sb
+          .from('character_library')
+          .select('reference_image_url')
+          .ilike('name', name)
+          .maybeSingle();
+        refUrl = dbChar?.reference_image_url;
+      } catch (dbErr) {
+        console.warn(`  ⚠️  ${name}: failed to fetch reference_image_url from DB (non-fatal): ${dbErr.message}`);
+      }
+    }
+
+    if (refUrl) {
+      try {
+        character.referenceImageBuffer = await downloadFromStorage({ bucket: BUCKETS.characters, path: refUrl });
+        console.log(`  ✓ ${name}: reference image loaded from storage (${refUrl})`);
+      } catch (dlErr) {
+        console.warn(`  ⚠️  ${name}: reference image download failed (non-fatal) — generating without ref: ${dlErr.message}`);
+      }
+    }
+  }
+
+  // RESUME LOGIC NOTE:
+  // doneScenes = scenes already in scene_assets with status='completed' (PRIMARY source of truth)
+  // approvedImages = in-memory/state approval (secondary, used within a single run)
+  // To force a scene to regenerate: use resetSceneForRegeneration() from lib/pipeline-utils.mjs
+  //   which clears BOTH sources. Clearing only pipeline_state is NOT sufficient.
   // Check which scenes already have completed assets (resume-safe)
   const { data: existingAssets } = await sb.from('scene_assets')
     .select('scene_number')

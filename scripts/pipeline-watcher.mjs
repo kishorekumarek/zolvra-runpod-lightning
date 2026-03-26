@@ -3,6 +3,7 @@
 // Polls NEXUS for approved cards and resumes pipeline stages.
 // Run with: nohup node scripts/pipeline-watcher.mjs >> /tmp/pipeline-watcher.log 2>&1 &
 import 'dotenv/config';
+import { openSync, constants as fsConstants } from 'fs';
 import { getSupabase } from '../lib/supabase.mjs';
 
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
@@ -51,6 +52,20 @@ async function checkAndResume() {
 
       // If stage 2 is approved/awaiting_review and stage 3 hasn't started → resume
       if (stage2?.status === 'awaiting_review' && !stage3) {
+        // Atomically claim: only update if still 'awaiting_review' (prevents double-spawn)
+        const { data: claimed, error: claimErr } = await sb
+          .from('video_pipeline_runs')
+          .update({ status: 'completed' })
+          .eq('task_id', taskId)
+          .eq('stage', 2)
+          .eq('status', 'awaiting_review')
+          .select('task_id');
+
+        if (claimErr || !claimed?.length) {
+          // Another poll already claimed this — skip
+          continue;
+        }
+
         console.log(`[${new Date().toISOString()}] ✅ Script approved (card ${card.id}), resuming pipeline task ${taskId} from stage 3`);
 
         // Find concept task (the approved story_proposal)
@@ -72,31 +87,22 @@ async function checkAndResume() {
           {
             cwd: new URL('..', import.meta.url).pathname,
             detached: true,
-            stdio: ['ignore', 
-              await openLog(`/tmp/pipeline-${taskId.slice(0,8)}-stage3.log`),
-              await openLog(`/tmp/pipeline-${taskId.slice(0,8)}-stage3.log`)
+            stdio: ['ignore',
+              openLog(`/tmp/pipeline-${taskId.slice(0,8)}-stage3.log`),
+              openLog(`/tmp/pipeline-${taskId.slice(0,8)}-stage3.log`)
             ],
           }
         );
         child.unref();
 
         console.log(`[${new Date().toISOString()}] 🚀 Launched pipeline child PID: ${child.pid}`);
-
-        // Mark stage 2 as completed so we don't re-trigger
-        await sb.from('video_pipeline_runs')
-          .update({ status: 'completed' })
-          .eq('task_id', taskId)
-          .eq('stage', 2);
       }
     }
   }
 }
 
-async function openLog(path) {
-  const { open } = await import('fs/promises');
-  const { constants } = await import('fs');
-  return open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND)
-    .then(f => f.fd);
+function openLog(path) {
+  return openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND);
 }
 
 // Run once immediately, then poll

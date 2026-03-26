@@ -2,8 +2,8 @@
 import 'dotenv/config';
 import { getSupabase } from '../lib/supabase.mjs';
 import { getSetting, setSetting, isFeedbackCollectionMode, getVideoType } from '../lib/settings.mjs';
-import { createNexusCard } from '../lib/nexus-client.mjs';
-import { publishVideo, addToPlaylist } from '../lib/youtube.mjs';
+import { addToPlaylist } from '../lib/youtube.mjs';
+import { sendTelegramMessage } from '../lib/telegram.mjs';
 import { analyzeVideoFeedback, runBatchFeedbackAnalysis } from '../lib/feedback-engine.mjs';
 import { withRetry } from '../lib/retry.mjs';
 
@@ -15,8 +15,20 @@ const STAGE = 9;
 export async function runStage9(taskId, tracker, state = {}) {
   console.log('🌍 Stage 9: Publishing to YouTube...');
 
+  // Stage 8 no longer uploads to YouTube — upload is handled via publish-video.mjs on demand.
+  if (!state.youtubeVideoId) {
+    console.log('⏭️  Stage 9: no YouTube video ID — skipping (upload handled via publish-video.mjs)');
+    return state;
+  }
+
   const { youtubeVideoId, youtubeUrl, script } = state;
-  if (!youtubeVideoId) throw new Error('Stage 9: youtubeVideoId not found');
+  if (!youtubeVideoId) {
+    // Stage 8 no longer uploads to YouTube — upload happens via publish-video.mjs on demand.
+    // Stage 9 is kept in the auto-chain for legacy compatibility but is a no-op until
+    // youtubeVideoId is set (i.e. after publish-video.mjs runs).
+    console.warn('⚠️  Stage 9: youtubeVideoId not found — skipping (video not yet uploaded via publish-video.mjs)');
+    return state;
+  }
 
   const sb = getSupabase();
   const videoType = state.videoType ?? await getVideoType(); // 'long' | 'short'
@@ -42,14 +54,14 @@ export async function runStage9(taskId, tracker, state = {}) {
     console.log(`  ⏭️  Skipping end card — not applicable for YouTube Shorts.`);
   }
 
-  console.log(`  ✅ Published: https://youtu.be/${youtubeVideoId}`);
+  console.log(`  ✅ Ready for review (unlisted): https://youtu.be/${youtubeVideoId}`);
 
   // Record feedback approval (auto-approved since we published)
   await sb.from('pipeline_feedback').insert({
     video_id: taskId,
     stage:    STAGE,
     decision: 'approved',
-    comment:  'Published to YouTube',
+    comment:  'Uploaded to YouTube (unlisted)',
   });
 
   // Increment feedback_collection_completed counter
@@ -79,39 +91,17 @@ export async function runStage9(taskId, tracker, state = {}) {
 
   // Check if feedback collection mode should end
   const isCollecting = await isFeedbackCollectionMode();
-  if (!isCollecting && current < target && next >= target) {
+  if (isCollecting && next >= target) {
     // Just crossed the threshold
     await setSetting('feedback_collection_mode', false);
 
-    await createNexusCard({
-      title: '🎓 Feedback Collection Complete!',
-      description: [
-        `${target} videos have been reviewed by Darl.`,
-        `The pipeline is now switching to automated quality gates.`,
-        `Future videos (stages 3–7) will run without NEXUS review unless a quality gate fails.`,
-        `\nStages 1, 2, and 8 remain human-gated permanently.`,
-      ].join('\n'),
-      task_type: 'milestone',
-      priority: 'medium',
-      stream: 'youtube',
-    });
+    await sendTelegramMessage(`🎓 Feedback collection complete! ${target} videos reviewed. Switching to automated quality gates.`);
 
     console.log(`  🎓 Feedback collection complete! Switching to automated mode.`);
   }
 
-  // Create completion card in NEXUS
-  await createNexusCard({
-    title: `✅ Published: ${script?.metadata?.title || 'Episode ' + state.episodeNumber}`,
-    description: [
-      `Episode ${state.episodeNumber || '?'} is now live on YouTube!`,
-      `**URL:** https://youtu.be/${youtubeVideoId}`,
-      `**Total videos published:** ${next}`,
-    ].join('\n'),
-    task_type: 'milestone',
-    priority: 'low',
-    stream: 'youtube',
-  });
+  await sendTelegramMessage(`✅ Uploaded (unlisted): ${script?.metadata?.title || 'Episode ' + state.episodeNumber}\nhttps://youtu.be/${youtubeVideoId}\nTotal uploaded: ${next}`);
 
-  console.log(`✅ Stage 9 complete. Video live: https://youtu.be/${youtubeVideoId}`);
+  console.log(`✅ Stage 9 complete. Video uploaded (unlisted): https://youtu.be/${youtubeVideoId}`);
   return { ...state, published: true, publishedAt: new Date().toISOString() };
 }

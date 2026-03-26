@@ -1,10 +1,19 @@
 #!/usr/bin/env node
-// launch-pipeline.mjs — Bootstrap Stage 2+ with concept loaded from ops_tasks card
-// Usage: node scripts/launch-pipeline.mjs <concept_task_id> [start_stage]
+// launch-pipeline-from-story.mjs — Run Stage 1B + full pipeline from a story file
+// Usage: node scripts/launch-pipeline-from-story.mjs <story-file> [video_type] [start_stage]
+//
+// Designed to be spawned as a DETACHED process so Friday stays responsive:
+//   const child = spawn('node', ['scripts/launch-pipeline-from-story.mjs', '/tmp/story.txt', 'short'], {
+//     detached: true, stdio: ['ignore', logFd, logFd],
+//   });
+//   child.unref();
+
 import 'dotenv/config';
+import { readFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { getSupabase } from '../lib/supabase.mjs';
 import { CostTracker } from '../lib/cost-tracker.mjs';
+import { extractConceptFromStory } from '../stages/stage-01b-story-intake.mjs';
 import { runStage2 } from '../stages/stage-02-script-gen.mjs';
 import { runStage3 } from '../stages/stage-03-character-prep.mjs';
 import { runStage4 } from '../stages/stage-04-illustrate.mjs';
@@ -15,10 +24,15 @@ import { runStage8 } from '../stages/stage-08-review.mjs';
 import { runStage9 } from '../stages/stage-09-publish.mjs';
 import { flushApprovalUpdates, PipelineAbortError } from '../lib/telegram.mjs';
 
-const [,, conceptTaskIdArg, startStageArg, taskIdArg] = process.argv;
-const conceptTaskId = conceptTaskIdArg || '13';
-const startStage = parseInt(startStageArg || '2', 10);
+const [,, storyFileArg, videoTypeArg, startStageArg, taskIdArg] = process.argv;
 
+if (!storyFileArg) {
+  console.error('Usage: node scripts/launch-pipeline-from-story.mjs <story-file> [short|long] [start_stage] [task_id]');
+  process.exit(1);
+}
+
+const videoType = videoTypeArg || 'short';
+const startStage = parseInt(startStageArg || '2', 10);
 const sb = getSupabase();
 
 // ── Single pipeline lock ───────────────────────────────────────────────
@@ -39,70 +53,27 @@ await sb.from('pipeline_settings').upsert({ key: 'pipeline_abort', value: false 
 // Flush stale Telegram approval updates from previous runs
 await flushApprovalUpdates();
 
-// Load concept from ops_tasks card
-const { data: card, error } = await sb
-  .from('ops_tasks')
-  .select('*')
-  .eq('id', parseInt(conceptTaskId, 10))
-  .single();
+// ── Stage 1B: Extract concept from story ───────────────────────────────
+const storyText = await readFile(storyFileArg, 'utf8');
+console.log(`\n📖 Story loaded from ${storyFileArg} (${storyText.length} chars, type: ${videoType})`);
 
-if (error || !card) {
-  console.error('Failed to load concept card:', error?.message);
-  process.exit(1);
-}
+const concept = await extractConceptFromStory(storyText, { videoType });
 
-// Parse concept from card description — try JSON first (from Stage 0/1), fall back to markdown regex (legacy)
-function parseConceptDescription(desc, cardTitle) {
-  // Try JSON (enriched concept from Stage 1)
-  try {
-    const parsed = JSON.parse(desc);
-    if (parsed.title && parsed.characters) return parsed;
-  } catch {
-    // Not JSON — fall back to markdown parsing
-  }
+const taskId = taskIdArg || randomUUID();
 
-  // Legacy: parse from markdown description
-  const theme = desc.match(/\*\*Theme:\*\*\s*(.+)/)?.[1]?.trim() || '';
-  const charactersRaw = desc.match(/\*\*Characters:\*\*\s*(.+)/)?.[1]?.trim() || '';
-  const synopsis = desc.match(/\*\*Synopsis:\*\*\s*([\s\S]+?)(?=\n\*\*|$)/)?.[1]?.trim() || desc;
-  const targetDuration = parseInt(desc.match(/\*\*Target duration:\*\*\s*(\d+)s/)?.[1] || '90', 10);
-  const targetAge = desc.match(/\*\*Target age:\*\*\s*(.+)/)?.[1]?.trim() || '3-7';
-  const characters = charactersRaw.split(',').map(c => c.trim()).filter(Boolean);
+// Record Stage 1B
+await sb.from('video_pipeline_runs').upsert({
+  task_id: taskId,
+  stage: 1,
+  status: 'completed',
+  started_at: new Date().toISOString(),
+  completed_at: new Date().toISOString(),
+}, { onConflict: 'task_id,stage' });
 
-  return {
-    title: cardTitle.replace(/^Story Concept \d+:\s*/, '').replace('Story Concept: ', '').trim(),
-    theme,
-    characters,
-    synopsis,
-    targetDurationSeconds: targetDuration,
-    targetAge,
-  };
-}
-
-const concept = parseConceptDescription(card.description || '', card.title || '');
-
-console.log(`\n🎬 YouTube AI Pipeline`);
+console.log(`\n🎬 YouTube AI Pipeline (from story)`);
 console.log(`   Concept: ${concept.title}`);
-console.log(`   Theme: ${concept.theme}`);
-console.log(`   Characters: ${(concept.characters || []).join(', ')}`);
-console.log(`   Video type: ${concept.videoType || 'not set'}`);
-console.log(`   Starting at stage: ${startStage}\n`);
-
-// Reuse existing taskId or create new one
-let taskId = taskIdArg;
-if (!taskId) {
-  taskId = randomUUID();
-  // Record Stage 1
-  await sb.from('video_pipeline_runs').upsert({
-    task_id: taskId,
-    stage: 1,
-    status: 'completed',
-    started_at: new Date().toISOString(),
-    completed_at: new Date().toISOString(),
-  }, { onConflict: 'task_id,stage' });
-}
-
-console.log(`   Task ID:      ${taskId}\n`);
+console.log(`   Video type: ${videoType}`);
+console.log(`   Task ID: ${taskId}\n`);
 
 const tracker = new CostTracker(taskId);
 
@@ -117,9 +88,8 @@ if (startStage > 2) {
     .from('video_pipeline_runs')
     .select('stage, pipeline_state')
     .eq('task_id', taskId)
-    .in('status', ['completed', 'awaiting_review', 'running', 'in_progress'])
+    .in('status', ['completed', 'awaiting_review'])
     .order('stage', { ascending: true });
-
   for (const run of priorRuns || []) {
     if (run.pipeline_state) {
       console.log(`  ↩️  Restoring state from stage ${run.stage}`);
@@ -144,9 +114,8 @@ for (const [stageNum, stageFn] of Object.entries(stageFns).map(([k,v]) => [parse
     await tracker.checkBudget();
     pipelineState = await stageFn(taskId, tracker, pipelineState) || pipelineState;
     await tracker.flush(stageNum);
-    // Persist state snapshot so restarts can resume cleanly
     const stateSnapshot = { ...pipelineState };
-    delete stateSnapshot.taskId; // don't duplicate
+    delete stateSnapshot.taskId;
     await sb.from('video_pipeline_runs')
       .update({ status: 'completed', completed_at: new Date().toISOString(), pipeline_state: stateSnapshot })
       .eq('task_id', taskId).eq('stage', stageNum);

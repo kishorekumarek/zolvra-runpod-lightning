@@ -5,13 +5,15 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getSupabase } from '../lib/supabase.mjs';
 import { isFeedbackCollectionMode } from '../lib/settings.mjs';
-import { createNexusCard } from '../lib/nexus-client.mjs';
+import { sendTelegramMessage, sendTelegramMessageWithButtons, sendApprovalBotMedia, waitForTelegramResponse } from '../lib/telegram.mjs';
 import { submitWanJob, pollWanJob, downloadWanVideo } from '../lib/wan.mjs';
 import { uploadSceneAnimation, uploadSceneImage, getSignedUrl, downloadFromStorage, BUCKETS } from '../lib/storage.mjs';
 import { generateSceneImage, buildScenePrompt } from '../lib/image-gen.mjs';
 import { stillImageToVideo } from '../lib/ffmpeg.mjs';
 import { withRetry } from '../lib/retry.mjs';
 import { calcAnimationCost, calcImageCost } from '../lib/cost-tracker.mjs';
+import { callClaude } from '../../shared/claude.mjs';
+import { getVideoConfig } from '../lib/video-config.mjs';
 
 const STAGE = 5;
 const NSFW_HALT_RATIO = 0.8; // halt pipeline if >80% of scenes fail
@@ -21,98 +23,195 @@ const WAN_INTER_JOB_DELAY_MS = 10000; // 10s delay between Wan jobs
  * Build a concise animation prompt from scene data (max ~300 chars).
  * "Scene setting. Character name + key visual. Gentle movement, warm lighting, Pixar animation style, child-friendly Tamil village scene."
  */
-function buildWanPrompt(scene) {
+function buildWanPrompt(scene, artStyle = '3D Pixar animation style', aspectRatio = '16:9') {
   const setting   = scene.environment || 'Tamil village';
   const speaker   = scene.speaker   || 'characters';
   const emotion   = scene.emotion   || 'happy';
   const descSnip  = (scene.visual_description || '').slice(0, 150).replace(/\n/g, ' ').trim();
+  const orientation = aspectRatio === '9:16' ? '9:16 vertical portrait' : '16:9 widescreen';
 
-  const prompt = `${setting} scene, ${emotion} mood. ${speaker}: ${descSnip}. Gentle movement, warm lighting, Pixar animation style, child-friendly Tamil village scene.`;
+  const prompt = `${setting} scene, ${emotion} mood, ${orientation}. ${speaker}: ${descSnip}. Smooth animation, ${artStyle}, gentle movement, warm cinematic lighting, child-friendly.`;
   // Clamp to 300 chars
   return prompt.slice(0, 300);
 }
 
 /**
- * Stage 5: Animate each scene with Wan 2.6 image-to-video (one by one, 10s delay between jobs).
+ * Refine a Wan animation prompt based on reviewer feedback via Claude.
+ * Returns the refined prompt, or the original if refinement fails.
+ */
+async function refineWanPrompt(currentPrompt, feedback) {
+  try {
+    const msg = await callClaude({
+      model: 'claude-sonnet-4-6',
+      maxTokens: 256,
+      system: 'You are an animation prompt editor for a children\'s YouTube channel. Given a current image-to-video animation prompt and reviewer feedback, return ONLY an updated prompt string (max 300 characters). Focus on motion, camera movement, character actions, and mood. No JSON, no explanation, just the prompt text.',
+      messages: [{
+        role: 'user',
+        content: `Current animation prompt: "${currentPrompt}"\n\nReviewer feedback: "${feedback}"\n\nReturn the updated prompt.`,
+      }],
+    });
+    const refined = msg.content[0]?.text?.trim() || currentPrompt;
+    return refined.slice(0, 300); // Wan max 300 chars
+  } catch (err) {
+    console.warn(`  ⚠️  Wan prompt refinement failed: ${err.message} — reusing previous prompt`);
+    return currentPrompt;
+  }
+}
+
+/**
+ * Stage 5: Animate each scene with Wan 2.6 image-to-video.
+ * Generate one → send for approval (Telegram) → approved or regenerate → next scene.
  */
 export async function runStage5(taskId, tracker, state = {}) {
   console.log('🎬 Stage 5: Scene animation (Wan 2.6)...');
 
-  const { scenes, sceneImagePaths, characterMap, parentCardId, tmpDir } = state;
+  const { scenes, sceneImagePaths, characterMap, tmpDir, videoType, artStyle } = state;
+  const aspectRatio = getVideoConfig(videoType).aspectRatio;
   if (!scenes) throw new Error('Stage 5: scenes not found');
   if (!sceneImagePaths) throw new Error('Stage 5: sceneImagePaths not found');
 
   const sb = getSupabase();
-  const sceneAnimPaths = {};
+  const sceneAnimPaths = state.sceneAnimPaths || {};
+  const approvedAnims = state.approvedAnims || {};
+  const feedbackMode = await isFeedbackCollectionMode();
+  let failureCount = 0;
 
-  // Process scenes ONE BY ONE to avoid Wan rate limits
   const validScenes = scenes.filter(s => sceneImagePaths[s.scene_number]);
-  const results = [];
+
+  if (feedbackMode) {
+    await sendTelegramMessage(`🎬 Stage 5: Animating ${validScenes.length} scenes (one at a time with approval)`);
+  }
 
   for (let i = 0; i < validScenes.length; i++) {
     const scene = validScenes[i];
-    const result = await Promise.allSettled([
-      animateScene({
-        taskId, scene,
-        imagePath: sceneImagePaths[scene.scene_number]?.imagePath,
-        storagePath: sceneImagePaths[scene.scene_number]?.storagePath,
-        characterMap, tmpDir, tracker
-      })
-    ]);
-    results.push({ ...result[0], scene });
+    const sceneNum = scene.scene_number;
 
-    // 10s delay between jobs (except after last)
+    // Skip already-approved (resume support)
+    if (approvedAnims[sceneNum]?.approved) {
+      console.log(`  Scene ${sceneNum}: animation already approved — skipping`);
+      continue;
+    }
+
+    // Generate animation
+    let animResult;
+    try {
+      animResult = await animateScene({
+        taskId, scene,
+        imagePath: sceneImagePaths[sceneNum]?.imagePath,
+        storagePath: sceneImagePaths[sceneNum]?.storagePath,
+        characterMap, tmpDir, tracker, artStyle, aspectRatio,
+      });
+      sceneAnimPaths[sceneNum] = { animPath: animResult.animPath, storagePath: animResult.storagePath };
+    } catch (err) {
+      failureCount++;
+      console.warn(`  ⚠️  Scene ${sceneNum} animation failed: ${err.message}`);
+
+      // Try static fallback
+      try {
+        const localImagePath = await ensureLocalImagePath({
+          imagePath: sceneImagePaths[sceneNum]?.imagePath,
+          storagePath: sceneImagePaths[sceneNum]?.storagePath,
+          sceneNumber: sceneNum, tmpDir,
+        });
+        const fallback = await staticImageFallback({ taskId, scene, imagePath: localImagePath, storagePath: sceneImagePaths[sceneNum]?.storagePath, tmpDir, tracker, videoType });
+        sceneAnimPaths[sceneNum] = { animPath: fallback.animPath, storagePath: fallback.storagePath };
+        animResult = fallback;
+      } catch (fallbackErr) {
+        console.warn(`  ⚠️  Scene ${sceneNum} static fallback also failed: ${fallbackErr.message}`);
+        await sendTelegramMessage(`⚠️ Manual animation needed: Scene ${sceneNum}\nAnimation failed: ${err.message}\nFallback failed: ${fallbackErr.message}`);
+        if (failureCount / validScenes.length > NSFW_HALT_RATIO) {
+          throw new Error(`Too many animation failures (${failureCount}/${validScenes.length})`);
+        }
+        continue;
+      }
+    }
+
+    if (!feedbackMode) {
+      // Auto mode — no approval, move to next
+      approvedAnims[sceneNum] = { approved: true };
+      if (i < validScenes.length - 1) await new Promise(r => setTimeout(r, WAN_INTER_JOB_DELAY_MS));
+      continue;
+    }
+
+    // Feedback mode — send for approval
+    let approved = false;
+    while (!approved) {
+      const entry = sceneAnimPaths[sceneNum];
+
+      // Send video to Telegram
+      if (entry.animPath) {
+        const caption = `🎬 Scene ${sceneNum}/${validScenes.length} (${scene.speaker}, ${scene.emotion})\nDuration: 10s | Resolution: 1080p\n${scene.visual_description?.slice(0, 200) || ''}`;
+        await sendApprovalBotMedia({ filePath: entry.animPath, type: 'video', caption });
+      }
+
+      // Send approve/reject buttons (prefixed callback)
+      const callbackPrefix = `s5_${sceneNum}`;
+      const telegramMessageId = await sendTelegramMessageWithButtons(
+        `🎬 Scene ${sceneNum}/${validScenes.length} Animation Review\nApprove or reject with feedback to regenerate`,
+        callbackPrefix
+      );
+
+      // Wait for response from Telegram
+      const decision = await waitForTelegramResponse(telegramMessageId, callbackPrefix);
+
+      if (decision.approved) {
+        approvedAnims[sceneNum] = { approved: true };
+        approved = true;
+        console.log(`  ✓ Scene ${sceneNum} animation approved`);
+      } else {
+        console.log(`  ✗ Scene ${sceneNum} animation rejected: ${decision.comment}`);
+
+        // Refine Wan prompt based on feedback, then regenerate
+        const currentPrompt = buildWanPrompt(scene, artStyle, aspectRatio);
+        const refinedPrompt = decision.comment
+          ? await refineWanPrompt(currentPrompt, decision.comment)
+          : currentPrompt;
+        console.log(`  ↩️  Regenerating scene ${sceneNum} animation with refined prompt...`);
+        try {
+          const regen = await animateScene({
+            taskId, scene,
+            imagePath: sceneImagePaths[sceneNum]?.imagePath,
+            storagePath: sceneImagePaths[sceneNum]?.storagePath,
+            characterMap, tmpDir, tracker, artStyle, aspectRatio,
+            promptOverride: refinedPrompt,
+          });
+          sceneAnimPaths[sceneNum] = { animPath: regen.animPath, storagePath: regen.storagePath };
+        } catch (regenErr) {
+          console.warn(`  ⚠️  Regeneration failed: ${regenErr.message} — using static fallback`);
+          const localImagePath = await ensureLocalImagePath({
+            imagePath: sceneImagePaths[sceneNum]?.imagePath,
+            storagePath: sceneImagePaths[sceneNum]?.storagePath,
+            sceneNumber: sceneNum, tmpDir,
+          });
+          const fallback = await staticImageFallback({ taskId, scene, imagePath: localImagePath, storagePath: sceneImagePaths[sceneNum]?.storagePath, tmpDir, tracker, videoType });
+          sceneAnimPaths[sceneNum] = { animPath: fallback.animPath, storagePath: fallback.storagePath };
+        }
+      }
+
+      // Save intermediate state for resume safety
+      await sb.from('video_pipeline_runs').upsert({
+        task_id: taskId,
+        stage: STAGE,
+        status: 'in_progress',
+        pipeline_state: { ...state, sceneAnimPaths, approvedAnims },
+      }, { onConflict: 'task_id,stage' });
+    }
+
+    // Delay before next Wan job
     if (i < validScenes.length - 1) {
-      console.log(`  ⏳ Waiting ${WAN_INTER_JOB_DELAY_MS / 1000}s before next Wan job...`);
       await new Promise(r => setTimeout(r, WAN_INTER_JOB_DELAY_MS));
     }
   }
 
-  const failed = results.filter(r => r.status === 'rejected');
-
-  if (validScenes.length > 0 && failed.length / validScenes.length > NSFW_HALT_RATIO) {
-    throw new Error(
-      `Too many animation failures (${failed.length}/${validScenes.length}, ${Math.round(failed.length / validScenes.length * 100)}%). ` +
-      `Errors: ${failed.map(f => f.reason?.message).join('; ')}`
-    );
-  }
-
-  if (failed.length > 0) {
-    for (const f of failed) {
-      console.warn(`  ⚠️  Scene ${f.scene.scene_number} animation failed: ${f.reason?.message}`);
-      await createNexusCard({
-        title: `Manual animation needed: Scene ${f.scene.scene_number}`,
-        description: `Animation failed: ${f.reason?.message}\nPlease upload a replacement MP4 to scenes/${taskId}/scene_${String(f.scene.scene_number).padStart(2, '0')}_anim.mp4`,
-        task_type: 'stage_review',
-        priority: 'high',
-        parent_id: parentCardId,
-        stream: 'youtube',
-      });
-    }
-  }
-
-  // Collect successful paths
-  for (const r of results) {
-    if (r.status === 'fulfilled') {
-      const { scene, animPath, storagePath } = r.value;
-      sceneAnimPaths[scene.scene_number] = { animPath, storagePath };
-    }
-  }
-
-  // Feedback collection mode — review animations
-  if (await isFeedbackCollectionMode()) {
-    await feedbackReviewAnimations({ taskId, sceneAnimPaths, parentCardId, sb });
-  }
-
   console.log(`✅ Stage 5 complete. ${Object.keys(sceneAnimPaths).length}/${validScenes.length} scenes animated`);
-  return { ...state, sceneAnimPaths };
+  return { ...state, sceneAnimPaths, approvedAnims };
 }
 
-async function animateScene({ taskId, scene, imagePath, storagePath, characterMap, tmpDir, tracker }) {
+async function animateScene({ taskId, scene, imagePath, storagePath, characterMap, tmpDir, tracker, artStyle, aspectRatio = '16:9', promptOverride = null }) {
   if (!storagePath) throw new Error(`No storage path for scene ${scene.scene_number}`);
 
-  // Build concise Wan prompt (max 300 chars)
-  const prompt = buildWanPrompt(scene);
+  // Use override prompt if provided (from feedback refinement), otherwise build fresh
+  const prompt = promptOverride || buildWanPrompt(scene, artStyle, aspectRatio);
   console.log(`  Submitting Wan 2.6 job for scene ${scene.scene_number}...`);
   console.log(`  Prompt: ${prompt}`);
 
@@ -121,7 +220,7 @@ async function animateScene({ taskId, scene, imagePath, storagePath, characterMa
 
   const imageUrl = await resolveSignedUrl(currentStoragePath, scene.scene_number);
   const wanTaskId = await withRetry(
-    () => submitWanJob({ imageUrl, prompt }),
+    () => submitWanJob({ imageUrl, prompt, aspectRatio }),
     { maxRetries: 3, baseDelayMs: 30000, stage: STAGE, taskId }
   );
 
@@ -185,7 +284,7 @@ async function resolveSignedUrl(storagePath, sceneNumber) {
 }
 
 /** Re-generate scene image with an extra-safe prompt to avoid NSFW rejection. */
-async function regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracker }) {
+async function regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracker, aspectRatio = '9:16' }) {
   // Look up character by scene.speaker (flat format — no scene.lines)
   const character = characterMap?.[scene.speaker]
     ?? characterMap?.[scene.speaker?.toUpperCase()]
@@ -193,7 +292,7 @@ async function regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracke
     ?? null;
 
   const extraSuffix = 'minimal characters, simple background, no physical contact between characters, wide shot, child-friendly';
-  const prompt = buildScenePrompt(scene, character, extraSuffix);
+  const prompt = buildScenePrompt(scene, character, { extraSuffix, aspectRatio });
 
   console.log(`  Regenerating image for scene ${scene.scene_number} with extra-safe prompt...`);
   const imageBuffer = await withRetry(
@@ -217,12 +316,12 @@ async function regenerateSafeImage({ taskId, scene, characterMap, tmpDir, tracke
 }
 
 /** Create a freeze-frame 10s video from a still image as last-resort fallback. */
-async function staticImageFallback({ taskId, scene, imagePath, storagePath, tmpDir, tracker }) {
+async function staticImageFallback({ taskId, scene, imagePath, storagePath, tmpDir, tracker, videoType }) {
   const scenesDir = join(tmpDir, 'scenes');
   await fs.mkdir(scenesDir, { recursive: true });
   const animPath = join(scenesDir, `scene_${String(scene.scene_number).padStart(2, '0')}_anim.mp4`);
 
-  await stillImageToVideo({ imagePath, duration: 10, outputPath: animPath });
+  await stillImageToVideo({ imagePath, duration: 10, outputPath: animPath, videoType });
 
   const videoBuffer = await fs.readFile(animPath);
   const animStoragePath = await uploadSceneAnimation({
@@ -241,25 +340,3 @@ async function staticImageFallback({ taskId, scene, imagePath, storagePath, tmpD
   return { scene, animPath, storagePath: animStoragePath };
 }
 
-async function feedbackReviewAnimations({ taskId, sceneAnimPaths, parentCardId, sb }) {
-  console.log('  📋 Feedback collection mode: requesting animation review...');
-
-  const urlList = Object.entries(sceneAnimPaths)
-    .map(([n, { storagePath }]) => `Scene ${n}: ${storagePath}`)
-    .join('\n');
-
-  const cardId = await createNexusCard({
-    title: `[Feedback] Stage 5: Scene Animations Review`,
-    description: [
-      `Feedback collection mode: Please review all scene animations.`,
-      `\n**Animation paths:**\n${urlList}`,
-      `\nApprove to continue, or Request Changes with specific feedback per scene.`,
-    ].join('\n'),
-    task_type: 'stage_review',
-    priority: 'medium',
-    parent_id: parentCardId,
-    stream: 'youtube',
-  });
-
-  console.log(`  NEXUS animation review card created: ${cardId} (non-blocking)`);
-}
