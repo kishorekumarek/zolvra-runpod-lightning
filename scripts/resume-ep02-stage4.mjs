@@ -9,6 +9,7 @@ import { runStage4 } from '../stages/stage-04-illustrate.mjs';
 import { runStage5 } from '../stages/stage-05-animate.mjs';
 import { runStage6 } from '../stages/stage-06-voice.mjs';
 import { runStage7 } from '../stages/stage-07-assemble.mjs';
+import { STAGE_NUM_TO_ID } from '../lib/stage-ids.mjs';
 
 const TASK_ID = process.argv[2] || '210cfd98-f7d1-4f06-ac1d-e0f2587441d4';
 const START_STAGE = parseInt(process.argv[3] || '4', 10);

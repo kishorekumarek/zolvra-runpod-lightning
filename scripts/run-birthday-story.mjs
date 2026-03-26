@@ -13,6 +13,7 @@ import { runStage7 } from '../stages/stage-07-assemble.mjs';
 import { runStage8 } from '../stages/stage-08-review.mjs';
 import { runStage9 } from '../stages/stage-09-publish.mjs';
 import { flushApprovalUpdates, PipelineAbortError } from '../lib/telegram.mjs';
+import { STAGE_NUM_TO_ID } from '../lib/stage-ids.mjs';
 
 const STORY = `🌾 "Meenu and the Birthday That Changed Everything"
 

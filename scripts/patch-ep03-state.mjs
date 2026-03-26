@@ -2,6 +2,7 @@
 // Patch EP03 stage 2 pipeline_state to include the `script` object that stage 3 expects
 import 'dotenv/config';
 import { getSupabase } from '../lib/supabase.mjs';
+import { STAGE_NUM_TO_ID } from '../lib/stage-ids.mjs';
 
 const sb = getSupabase();
 const TASK_ID = 'cb03d267-388a-48c1-8678-3ef14fbf0ceb';

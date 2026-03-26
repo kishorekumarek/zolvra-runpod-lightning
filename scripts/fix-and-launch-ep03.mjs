@@ -3,6 +3,7 @@
 import 'dotenv/config';
 import { getSupabase } from '../lib/supabase.mjs';
 import { setSetting } from '../lib/settings.mjs';
+import { STAGE_NUM_TO_ID } from '../lib/stage-ids.mjs';
 
 const sb = getSupabase();
 const TASK_ID = 'cb03d267-388a-48c1-8678-3ef14fbf0ceb';

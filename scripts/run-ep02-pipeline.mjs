@@ -10,6 +10,7 @@ import { runStage4 } from '../stages/stage-04-illustrate.mjs';
 import { runStage5 } from '../stages/stage-05-animate.mjs';
 import { runStage6 } from '../stages/stage-06-voice.mjs';
 import { runStage7 } from '../stages/stage-07-assemble.mjs';
+import { STAGE_NUM_TO_ID } from '../lib/stage-ids.mjs';
 
 const sb = getSupabase();
 

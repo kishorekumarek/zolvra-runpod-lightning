@@ -25,12 +25,12 @@ const sb = getSupabase();
 // ── Single pipeline lock ───────────────────────────────────────────────
 const { data: running } = await sb
   .from('video_pipeline_runs')
-  .select('task_id, stage')
+  .select('task_id, stage_id')
   .in('status', ['running', 'in_progress'])
   .limit(1);
 
 if (running?.length) {
-  console.error(`Another pipeline is already running (task: ${running[0].task_id}, stage: ${running[0].stage}). Aborting.`);
+  console.error(`Another pipeline is already running (task: ${running[0].task_id}, stage: ${running[0].stage_id}). Aborting.`);
   process.exit(1);
 }
 
@@ -96,12 +96,11 @@ if (!taskId) {
   // Record Stage 1
   await sb.from('video_pipeline_runs').upsert({
     task_id: taskId,
-    stage: 1,
     stage_id: STAGE_NUM_TO_ID[1] ?? null,
     status: 'completed',
     started_at: new Date().toISOString(),
     completed_at: new Date().toISOString(),
-  }, { onConflict: 'task_id,stage' });
+  }, { onConflict: 'task_id,stage_id' });
 }
 
 console.log(`   Task ID:      ${taskId}\n`);
@@ -142,11 +141,10 @@ for (const stageNum of stageOrder) {
 
   await sb.from('video_pipeline_runs').upsert({
     task_id: taskId,
-    stage: stageNum,
     stage_id: STAGE_NUM_TO_ID[stageNum] ?? null,
     status: 'running',
     started_at: new Date().toISOString(),
-  }, { onConflict: 'task_id,stage' });
+  }, { onConflict: 'task_id,stage_id' });
 
   try {
     await tracker.checkBudget();
