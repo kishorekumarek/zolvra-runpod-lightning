@@ -57,7 +57,7 @@ async function checkAndResume() {
           .from('video_pipeline_runs')
           .update({ status: 'completed' })
           .eq('task_id', taskId)
-          .eq('stage', 2)
+          .eq('stage_id', 'script')
           .eq('status', 'awaiting_review')
           .select('task_id');
 

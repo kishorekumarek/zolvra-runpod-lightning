@@ -39,7 +39,7 @@ export async function runStage4(taskId, tracker, state = {}) {
       .from('video_pipeline_runs')
       .select('pipeline_state')
       .eq('task_id', taskId)
-      .eq('stage', 2)
+      .eq('stage_id', 'script')
       .order('started_at', { ascending: false })
       .limit(1)
       .single();
@@ -60,7 +60,10 @@ export async function runStage4(taskId, tracker, state = {}) {
   // We download those buffers here so illustrateScene() can pass them to generateSceneImage().
   // All errors are non-fatal — generation will proceed without reference images if download fails.
   for (const [name, character] of Object.entries(characterMap)) {
-    if (character.referenceImageBuffer) continue; // already loaded (from this run or state)
+    // Must be a real Buffer — not a deserialized JSONB object ({type:'Buffer',data:[...]})
+    // which looks truthy but breaks buf.toString('base64') in Gemini API call.
+    if (Buffer.isBuffer(character.referenceImageBuffer)) continue; // already a real Buffer
+    character.referenceImageBuffer = null; // clear stale deserialized object, re-download below
 
     // Check DB for reference_image_url if not already on the character object
     let refUrl = character.reference_image_url;

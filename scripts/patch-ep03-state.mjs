@@ -11,7 +11,7 @@ const { data: run } = await sb
   .from('video_pipeline_runs')
   .select('pipeline_state')
   .eq('task_id', TASK_ID)
-  .eq('stage', 2)
+  .eq('stage_id', 'script')
   .single();
 
 const { scenes, youtube_seo, episodeNumber } = run.pipeline_state;
@@ -40,7 +40,7 @@ const { error } = await sb
   .from('video_pipeline_runs')
   .update({ pipeline_state: updatedState })
   .eq('task_id', TASK_ID)
-  .eq('stage', 2);
+  .eq('stage_id', 'script');
 
 if (error) throw new Error(`Patch failed: ${error.message}`);
 console.log('\n✅ Stage 2 pipeline_state patched with script + videoType');
@@ -50,7 +50,7 @@ for (const stage of [3, 4]) {
   await sb.from('video_pipeline_runs')
     .update({ status: 'pending', started_at: null, completed_at: null, error: null, pipeline_state: null })
     .eq('task_id', TASK_ID)
-    .eq('stage', stage);
+    .eq('stage_id', STAGE_NUM_TO_ID[stage]);
 }
 console.log('✅ Stages 3-4 reset to pending');
 

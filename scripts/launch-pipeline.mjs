@@ -157,19 +157,19 @@ for (const stageNum of stageOrder) {
     delete stateSnapshot.taskId; // don't duplicate
     await sb.from('video_pipeline_runs')
       .update({ status: 'completed', stage_id: STAGE_NUM_TO_ID[stageNum] ?? null, completed_at: new Date().toISOString(), pipeline_state: stateSnapshot })
-      .eq('task_id', taskId).eq('stage', stageNum);
+      .eq('task_id', taskId).eq('stage_id', STAGE_NUM_TO_ID[stageNum]);
     console.log(`✅ Stage ${stageNum} complete`);
   } catch (err) {
     if (err instanceof PipelineAbortError) {
       await sb.from('video_pipeline_runs')
         .update({ status: 'aborted', stage_id: STAGE_NUM_TO_ID[stageNum] ?? null, error: err.message, completed_at: new Date().toISOString() })
-        .eq('task_id', taskId).eq('stage', stageNum);
+        .eq('task_id', taskId).eq('stage_id', STAGE_NUM_TO_ID[stageNum]);
       console.log(`\n🛑 Pipeline aborted at stage ${stageNum}: ${err.message}`);
       process.exit(0);
     }
     await sb.from('video_pipeline_runs')
       .update({ status: 'failed', stage_id: STAGE_NUM_TO_ID[stageNum] ?? null, error: err.message, completed_at: new Date().toISOString() })
-      .eq('task_id', taskId).eq('stage', stageNum);
+      .eq('task_id', taskId).eq('stage_id', STAGE_NUM_TO_ID[stageNum]);
     console.error(`❌ Stage ${stageNum} failed: ${err.message}`);
     console.error('🛑 Pipeline halted');
     process.exit(1);

@@ -66,14 +66,14 @@ async function main() {
     delete s8Snapshot.taskId;
     await sb.from('video_pipeline_runs')
       .update({ status: 'completed', completed_at: new Date().toISOString(), pipeline_state: s8Snapshot })
-      .eq('task_id', TASK_ID).eq('stage', 8);
+      .eq('task_id', TASK_ID).eq('stage_id', 'queue');
 
     console.log('\n✅ Stage 8 complete');
     console.log(`   YouTube URL: ${pipelineState.youtubeUrl}`);
   } catch (err) {
     await sb.from('video_pipeline_runs')
       .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
-      .eq('task_id', TASK_ID).eq('stage', 8);
+      .eq('task_id', TASK_ID).eq('stage_id', 'queue');
     console.error('\n💥 Stage 8 failed:', err.message);
     console.error(err.stack);
     process.exit(1);
@@ -96,14 +96,14 @@ async function main() {
     delete s9Snapshot.taskId;
     await sb.from('video_pipeline_runs')
       .update({ status: 'completed', completed_at: new Date().toISOString(), pipeline_state: s9Snapshot })
-      .eq('task_id', TASK_ID).eq('stage', 9);
+      .eq('task_id', TASK_ID).eq('stage_id', 'publish');
 
     console.log('\n✅ Stage 9 complete');
     console.log(`   Video unlisted at: ${pipelineState.youtubeUrl}`);
   } catch (err) {
     await sb.from('video_pipeline_runs')
       .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
-      .eq('task_id', TASK_ID).eq('stage', 9);
+      .eq('task_id', TASK_ID).eq('stage_id', 'publish');
     console.error('\n💥 Stage 9 failed:', err.message);
     console.error(err.stack);
     process.exit(1);

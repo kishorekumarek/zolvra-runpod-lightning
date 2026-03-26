@@ -96,7 +96,7 @@ export async function runStage8(taskId, tracker, state = {}) {
   await sb.from('video_pipeline_runs')
     .update({ status: 'awaiting_publish' })
     .eq('task_id', taskId)
-    .eq('stage', STAGE);
+    .eq('stage_id', 'queue');
 
   console.log('✅ Stage 8 complete. Video queued — pipeline closed. Publish via publish-video.mjs when ready.');
 

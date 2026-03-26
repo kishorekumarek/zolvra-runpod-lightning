@@ -249,7 +249,7 @@ for (const [stageNum, stageFn, label] of stageFns) {
         pipeline_state: stateSnapshot,
       })
       .eq('task_id', taskId)
-      .eq('stage', stageNum);
+      .eq('stage_id', STAGE_NUM_TO_ID[stageNum]);
 
     console.log(`✅ Stage ${stageNum} (${label}) complete`);
   } catch (err) {
@@ -260,7 +260,7 @@ for (const [stageNum, stageFn, label] of stageFns) {
         completed_at: new Date().toISOString(),
       })
       .eq('task_id', taskId)
-      .eq('stage', stageNum);
+      .eq('stage_id', STAGE_NUM_TO_ID[stageNum]);
 
     console.error(`\n❌ Stage ${stageNum} (${label}) FAILED: ${err.message}`);
     console.error('🛑 Pipeline halted.');

@@ -198,7 +198,8 @@ Return ONLY this JSON structure:
   ]
 }
 
-IMPORTANT: "characters" must list ALL characters VISIBLE in the scene (lowercase), not just the speaker. If narrator is speaking but Meenu and Kavi are shown, characters = ["meenu", "kavi"]. This is used for visual consistency.`;
+IMPORTANT: "characters" must list ALL characters VISIBLE in the scene (lowercase), not just the speaker. If narrator is speaking but Meenu and Kavi are shown, characters = ["meenu", "kavi"]. This is used for visual consistency.
+CRITICAL RULE: The speaker must ALWAYS be in the characters array. If uncle_ravi is speaking, characters must include "uncle ravi". Never omit the speaker from characters.`;
 }
 
 /**
@@ -230,7 +231,7 @@ export async function runStage2(taskId, tracker, state = {}) {
   const { count: episodeCount } = await sb
     .from('video_pipeline_runs')
     .select('*', { count: 'exact', head: true })
-    .eq('stage', 9)
+    .eq('stage_id', 'publish')
     .eq('status', 'completed');
 
   const episodeNumber = (episodeCount || 0) + 1;
@@ -394,7 +395,12 @@ export async function runStage2(taskId, tracker, state = {}) {
     metadata: {
       title: youtube_seo.title,
       episode: episodeNumber,
-      characters: [...new Set(scenes.flatMap(s => s.characters || [s.speaker]).filter(s => s && s !== 'narrator'))],
+      // Always include the speaker + concept characters as fallback — LLM often omits secondary
+      // characters from scene.characters arrays even when they're visually present or speaking.
+      characters: [...new Set([
+        ...scenes.flatMap(s => [...(s.characters || []), s.speaker].filter(Boolean)),
+        ...(concept?.characters || []),
+      ].map(c => c.toLowerCase()).filter(c => c && c !== 'narrator'))],
     },
     youtube_seo,
   };
@@ -459,6 +465,9 @@ function validateScenes(scenes, targetClips, knownCharacters, videoType = 'short
     // Filter to only known characters (library + concept) to exclude crowd/background characters
     if (!Array.isArray(scene.characters) || scene.characters.length === 0) {
       scene.characters = scene.speaker !== 'narrator' ? [scene.speaker] : [];
+    } else if (scene.speaker && scene.speaker !== 'narrator' && !scene.characters.includes(scene.speaker)) {
+      // Speaker missing from their own scene's characters array — add them
+      scene.characters.push(scene.speaker);
     } else {
       scene.characters = scene.characters
         .map(c => c.toLowerCase())

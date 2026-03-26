@@ -129,19 +129,19 @@ for (const [stageNum, stageFn] of stageFns) {
     delete stateSnapshot.taskId;
     await sb.from('video_pipeline_runs')
       .update({ status: 'completed', completed_at: new Date().toISOString(), pipeline_state: stateSnapshot })
-      .eq('task_id', taskId).eq('stage', stageNum);
+      .eq('task_id', taskId).eq('stage_id', STAGE_NUM_TO_ID[stageNum]);
     console.log(`✅ Stage ${stageNum} complete`);
   } catch (err) {
     if (err instanceof PipelineAbortError) {
       await sb.from('video_pipeline_runs')
         .update({ status: 'aborted', error: err.message, completed_at: new Date().toISOString() })
-        .eq('task_id', taskId).eq('stage', stageNum);
+        .eq('task_id', taskId).eq('stage_id', STAGE_NUM_TO_ID[stageNum]);
       console.log(`\n🛑 Pipeline aborted at stage ${stageNum}: ${err.message}`);
       process.exit(0);
     }
     await sb.from('video_pipeline_runs')
       .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
-      .eq('task_id', taskId).eq('stage', stageNum);
+      .eq('task_id', taskId).eq('stage_id', STAGE_NUM_TO_ID[stageNum]);
     console.error(`❌ Stage ${stageNum} failed: ${err.message}`);
     process.exit(1);
   }

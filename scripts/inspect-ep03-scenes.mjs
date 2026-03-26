@@ -10,7 +10,7 @@ const { data: run } = await sb
   .from('video_pipeline_runs')
   .select('pipeline_state')
   .eq('task_id', TASK_ID)
-  .eq('stage', 2)
+  .eq('stage_id', 'script')
   .single();
 
 const { scenes, youtube_seo, episodeNumber } = run.pipeline_state;

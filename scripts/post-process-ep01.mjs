@@ -25,7 +25,7 @@ async function findAssembledVideo() {
     .from('video_pipeline_runs')
     .select('pipeline_state')
     .eq('task_id', TASK_ID)
-    .eq('stage', 7)
+    .eq('stage_id', 'assemble')
     .single();
 
   if (row?.pipeline_state?.finalVideoPath) {

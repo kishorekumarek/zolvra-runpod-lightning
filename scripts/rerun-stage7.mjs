@@ -62,14 +62,14 @@ async function main() {
     delete s7Snapshot.taskId;
     await sb.from('video_pipeline_runs')
       .update({ status: 'completed', completed_at: new Date().toISOString(), pipeline_state: s7Snapshot })
-      .eq('task_id', TASK_ID).eq('stage', 7);
+      .eq('task_id', TASK_ID).eq('stage_id', 'assemble');
     console.log('\n✅ Stage 7 complete');
     console.log(`   Final video : ${pipelineState.finalVideoPath}`);
     console.log(`   Duration    : ${pipelineState.finalDurationSeconds?.toFixed(1)}s`);
   } catch (err) {
     await sb.from('video_pipeline_runs')
       .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
-      .eq('task_id', TASK_ID).eq('stage', 7);
+      .eq('task_id', TASK_ID).eq('stage_id', 'assemble');
     throw err;
   }
 }

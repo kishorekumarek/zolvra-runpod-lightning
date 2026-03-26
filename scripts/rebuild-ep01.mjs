@@ -30,7 +30,7 @@ async function main() {
     .from('video_pipeline_runs')
     .select('pipeline_state')
     .eq('task_id', TASK_ID)
-    .eq('stage', 2)
+    .eq('stage_id', 'script')
     .single();
 
   if (s2ReadErr) throw new Error(`Failed to read stage 2 row: ${s2ReadErr.message}`);
@@ -40,7 +40,7 @@ async function main() {
     .from('video_pipeline_runs')
     .update({ pipeline_state: updatedS2State })
     .eq('task_id', TASK_ID)
-    .eq('stage', 2);
+    .eq('stage_id', 'script');
 
   if (s2UpdateErr) throw new Error(`Failed to update stage 2 state: ${s2UpdateErr.message}`);
   console.log('✓ Stage 2 pipeline_state.scenes updated with corrected script');
@@ -51,7 +51,7 @@ async function main() {
     .from('video_pipeline_runs')
     .delete()
     .eq('task_id', TASK_ID)
-    .eq('stage', 6);
+    .eq('stage_id', 'tts');
 
   if (delErr) throw new Error(`Failed to delete stage 6 row: ${delErr.message}`);
   console.log('✓ Stage 6 row deleted — audio will regenerate');
@@ -107,12 +107,12 @@ async function main() {
     delete s6Snapshot.taskId;
     await sb.from('video_pipeline_runs')
       .update({ status: 'completed', completed_at: new Date().toISOString(), pipeline_state: s6Snapshot })
-      .eq('task_id', TASK_ID).eq('stage', 6);
+      .eq('task_id', TASK_ID).eq('stage_id', 'tts');
     console.log('\n✅ Stage 6 complete');
   } catch (err) {
     await sb.from('video_pipeline_runs')
       .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
-      .eq('task_id', TASK_ID).eq('stage', 6);
+      .eq('task_id', TASK_ID).eq('stage_id', 'tts');
     throw err;
   }
 
@@ -132,12 +132,12 @@ async function main() {
     delete s7Snapshot.taskId;
     await sb.from('video_pipeline_runs')
       .update({ status: 'completed', completed_at: new Date().toISOString(), pipeline_state: s7Snapshot })
-      .eq('task_id', TASK_ID).eq('stage', 7);
+      .eq('task_id', TASK_ID).eq('stage_id', 'assemble');
     console.log('\n✅ Stage 7 complete');
   } catch (err) {
     await sb.from('video_pipeline_runs')
       .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
-      .eq('task_id', TASK_ID).eq('stage', 7);
+      .eq('task_id', TASK_ID).eq('stage_id', 'assemble');
     throw err;
   }
 

@@ -30,7 +30,7 @@ async function main() {
       completed_at: new Date().toISOString(),
     })
     .eq('task_id', TASK_ID)
-    .eq('stage', 2);
+    .eq('stage_id', 'script');
 
   if (s2err) throw new Error(`Failed to update stage 2: ${s2err.message}`);
   console.log('✅ Stage 2 marked as completed');
@@ -47,7 +47,7 @@ async function main() {
         pipeline_state: null,
       })
       .eq('task_id', TASK_ID)
-      .eq('stage', stage);
+      .eq('stage_id', STAGE_NUM_TO_ID[stage]);
 
     if (error) console.warn(`Warning resetting stage ${stage}: ${error.message}`);
     else console.log(`✅ Stage ${stage} reset to pending`);

@@ -13,7 +13,7 @@ const { data: s3 } = await sb
   .from('video_pipeline_runs')
   .select('pipeline_state')
   .eq('task_id', taskId)
-  .eq('stage', 3)
+  .eq('stage_id', 'characters')
   .single();
 
 const characterMap = s3?.pipeline_state?.characters;
@@ -27,7 +27,7 @@ await sb
   .from('video_pipeline_runs')
   .update({ status: 'running', started_at: new Date().toISOString(), error: null })
   .eq('task_id', taskId)
-  .eq('stage', 4);
+  .eq('stage_id', 'illustrate');
 
 const tracker = new CostTracker(taskId);
 
@@ -49,7 +49,7 @@ try {
       error: null,
     })
     .eq('task_id', taskId)
-    .eq('stage', 4);
+    .eq('stage_id', 'illustrate');
 
   console.log('✅ Stage 4 completed');
 } catch (err) {
@@ -58,6 +58,6 @@ try {
     .from('video_pipeline_runs')
     .update({ status: 'failed', error: err.message })
     .eq('task_id', taskId)
-    .eq('stage', 4);
+    .eq('stage_id', 'illustrate');
   process.exit(1);
 }
