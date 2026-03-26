@@ -73,7 +73,7 @@ const sb = getSupabase();
 // ── Pipeline lock check ──────────────────────────────────────────────
 const { data: running } = await sb
   .from('video_pipeline_runs')
-  .select('task_id, stage')
+  .select('task_id, stage_id')
   .in('status', ['running', 'in_progress'])
   .limit(1);
 

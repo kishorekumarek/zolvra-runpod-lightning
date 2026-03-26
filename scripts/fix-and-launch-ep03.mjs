@@ -57,9 +57,9 @@ async function main() {
   // 4. Verify state
   const { data: runs } = await sb
     .from('video_pipeline_runs')
-    .select('stage, status')
+    .select('stage_id, status')
     .eq('task_id', TASK_ID)
-    .order('stage', { ascending: true });
+    .order('stage_id', { ascending: true });
 
   console.log('\nPipeline state after fix:');
   for (const r of runs) {

@@ -109,9 +109,9 @@ async function main() {
   console.log('\n━━━ STEP 2: Check Existing Pipeline State ━━━');
   const { data: existingRuns, error: queryErr } = await sb
     .from('video_pipeline_runs')
-    .select('stage, status, pipeline_state, completed_at')
+    .select('stage_id, status, pipeline_state, completed_at')
     .eq('task_id', EXISTING_TASK_ID)
-    .order('stage', { ascending: true });
+    .order('stage_id', { ascending: true });
 
   if (queryErr) {
     console.log('Query error (may not exist):', queryErr.message);
@@ -120,7 +120,7 @@ async function main() {
   if (existingRuns?.length) {
     console.log('Existing runs for task', EXISTING_TASK_ID, ':');
     for (const run of existingRuns) {
-      console.log(`  Stage ${run.stage}: ${run.status} (completed: ${run.completed_at || 'N/A'})`);
+      console.log(`  Stage ${run.stage_id}: ${run.status} (completed: ${run.completed_at || 'N/A'})`);
     }
 
     // Check if stage 2 is completed with valid script

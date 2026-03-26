@@ -36,8 +36,8 @@ async function checkAndResume() {
     // Find active pipeline task for this production card
     const { data: runs } = await sb
       .from('video_pipeline_runs')
-      .select('task_id, stage, status')
-      .order('stage', { ascending: false });
+      .select('task_id, stage_id, status')
+      .order('stage_id', { ascending: false });
 
     // Group by task_id, find ones stuck at stage 2 awaiting_review
     const byTask = {};

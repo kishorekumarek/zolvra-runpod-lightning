@@ -39,7 +39,7 @@ const sb = getSupabase();
 // ── Single pipeline lock ───────────────────────────────────────────────
 const { data: running } = await sb
   .from('video_pipeline_runs')
-  .select('task_id, stage')
+  .select('task_id, stage_id')
   .in('status', ['running', 'in_progress'])
   .limit(1);
 
@@ -87,13 +87,13 @@ let pipelineState = { taskId, concept };
 if (startStage > 2) {
   const { data: priorRuns } = await sb
     .from('video_pipeline_runs')
-    .select('stage, pipeline_state')
+    .select('stage_id, pipeline_state')
     .eq('task_id', taskId)
     .in('status', ['completed', 'awaiting_review'])
-    .order('stage', { ascending: true });
+    .order('stage_id', { ascending: true });
   for (const run of priorRuns || []) {
     if (run.pipeline_state) {
-      console.log(`  ↩️  Restoring state from stage ${run.stage}`);
+      console.log(`  ↩️  Restoring state from stage ${run.stage_id}`);
       pipelineState = { ...pipelineState, ...run.pipeline_state };
     }
   }

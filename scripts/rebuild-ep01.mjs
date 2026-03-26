@@ -60,17 +60,17 @@ async function main() {
   console.log('\n↩️  Restoring pipeline state from completed stages...');
   const { data: priorRuns, error: priorErr } = await sb
     .from('video_pipeline_runs')
-    .select('stage, pipeline_state')
+    .select('stage_id, pipeline_state')
     .eq('task_id', TASK_ID)
     .in('status', ['completed', 'awaiting_review'])
-    .order('stage', { ascending: true });
+    .order('stage_id', { ascending: true });
 
   if (priorErr) throw new Error(`Failed to load prior runs: ${priorErr.message}`);
 
   let pipelineState = { taskId: TASK_ID };
   for (const run of priorRuns || []) {
     if (run.pipeline_state) {
-      console.log(`   Stage ${run.stage}: restoring state`);
+      console.log(`   Stage ${run.stage_id}: restoring state`);
       pipelineState = { ...pipelineState, ...run.pipeline_state };
     }
   }

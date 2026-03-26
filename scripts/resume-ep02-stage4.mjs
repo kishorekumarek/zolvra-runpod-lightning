@@ -21,9 +21,9 @@ const sb = getSupabase();
 // Restore state from DB
 const { data: priorRuns, error: priorError } = await sb
   .from('video_pipeline_runs')
-  .select('stage, pipeline_state, status')
+  .select('stage_id, pipeline_state, status')
   .eq('task_id', TASK_ID)
-  .order('stage', { ascending: true });
+  .order('stage_id', { ascending: true });
 
 if (priorError) {
   console.error('❌ Cannot load prior runs:', priorError.message);
