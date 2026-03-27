@@ -13,6 +13,7 @@ import { sendApprovalBotMedia, sendTelegramMessageWithButtons, waitForTelegramRe
 import { recordVoiceFeedback } from '../lib/feedback-engine.mjs';
 
 const STAGE = 6;
+const STAGE_ID = 'tts';
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
 /**
@@ -69,9 +70,13 @@ async function callElevenLabs({ text, voiceId }) {
 export async function runStage6(taskId, tracker, state = {}) {
   console.log('🎙️  Stage 6: Voice generation...');
 
-  const { scenes, tmpDir, characterMap } = state;
+  const { scenes, characterMap } = state;
   if (!scenes) throw new Error('Stage 6: scenes not found');
-  if (!tmpDir) throw new Error('Stage 6: tmpDir not found');
+  let { tmpDir } = state;
+  if (!tmpDir) {
+    tmpDir = `/tmp/zolvra-pipeline/${taskId}`;
+    console.log('  [Stage 6] Creating tmpDir:', tmpDir);
+  }
 
   const sb = getSupabase();
   const audioDir = join(tmpDir, 'audio');
@@ -202,10 +207,10 @@ export async function runStage6(taskId, tracker, state = {}) {
       // Save intermediate state for resume safety
       await sb.from('video_pipeline_runs').upsert({
         task_id: taskId,
-        stage: STAGE,
+        stage_id: STAGE_ID,
         status: 'in_progress',
         pipeline_state: { ...state, enhancedSceneTexts, approvedSceneAudio, sceneAudioPaths },
-      }, { onConflict: 'task_id,stage' });
+      }, { onConflict: 'task_id,stage_id' });
     }
   }
 
