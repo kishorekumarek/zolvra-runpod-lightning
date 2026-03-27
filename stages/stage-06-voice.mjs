@@ -114,20 +114,31 @@ export async function runStage6(taskId, tracker, state = {}) {
     }
 
     // Look up voice: prefer characterVoiceMap (lightweight, survives restarts) →
-    // fall back to characterMap DB voice_id → VOICE_MAP → default narrator.
+    // fall back to characterMap DB voice_id → character_library table → VOICE_MAP → default narrator.
     // Skip PLACEHOLDER voice IDs (legacy characters not yet assigned).
     const { characterVoiceMap } = state;
     const lightweightVoiceId = characterVoiceMap?.[scene.speaker]
       ?? characterVoiceMap?.[scene.speaker?.toLowerCase()];
     const charEntry = characterMap?.[scene.speaker] ?? characterMap?.[scene.speaker?.toLowerCase()];
     const dbVoiceId = lightweightVoiceId || charEntry?.voice_id;
-    const voiceId = (dbVoiceId && dbVoiceId !== 'PLACEHOLDER')
-      ? dbVoiceId
-      : (VOICE_MAP[scene.speaker?.toLowerCase()] || VOICE_MAP.default);
-    if (!dbVoiceId || dbVoiceId === 'PLACEHOLDER') {
-      if (!VOICE_MAP[scene.speaker?.toLowerCase()]) {
-        console.warn(`  ⚠️  No voice_id for "${scene.speaker}" — using default narrator voice`);
+
+    // Resolve voice ID with character_library fallback (handles state loss on pipeline resume)
+    let voiceId = (dbVoiceId && dbVoiceId !== 'PLACEHOLDER') ? dbVoiceId : null;
+    if (!voiceId && scene.speaker && scene.speaker !== 'narrator') {
+      const { data: charRow } = await sb
+        .from('character_library')
+        .select('voice_id')
+        .ilike('name', scene.speaker)
+        .limit(1)
+        .single();
+      if (charRow?.voice_id) {
+        voiceId = charRow.voice_id;
+        console.log(`  🔍 voice_id for "${scene.speaker}" resolved from character_library: ${voiceId}`);
       }
+    }
+    if (!voiceId) {
+      console.warn(`  ⚠️  No voice_id for "${scene.speaker}" — using default narrator voice`);
+      voiceId = VOICE_MAP[scene.speaker?.toLowerCase()] || VOICE_MAP.narrator || VOICE_MAP.default || Object.values(VOICE_MAP)[0];
     }
     let enhancedText = enhancedSceneTexts[sceneNum] || `[${scene.emotion}] ${scene.text}`;
     let approved = false;
