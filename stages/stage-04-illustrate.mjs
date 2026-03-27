@@ -14,6 +14,7 @@ import { sendApprovalBotMedia, sendTelegramMessage, sendTelegramMessageWithButto
 import { getVideoConfig } from '../lib/video-config.mjs';
 
 const STAGE = 4;
+const STAGE_ID = 'illustrate';
 const MAX_SCENE_FAILURES = 5;
 
 /**
@@ -185,13 +186,15 @@ export async function runStage4(taskId, tracker, state = {}) {
           sceneImagePaths[sceneNum] = { imagePath: regenerated.imagePath, storagePath: regenerated.storagePath };
         }
 
-        // Save state after each scene approval
-        await sb.from('video_pipeline_runs').upsert({
-          task_id: taskId,
-          stage: STAGE,
-          status: 'running',
-          pipeline_state: { ...state, sceneImagePaths, approvedImages },
-        }, { onConflict: 'task_id,stage' });
+        // Batch state save: write every 3 scenes to reduce DB load
+        if (sceneNum % 3 === 0) {
+          await sb.from('video_pipeline_runs').upsert({
+            task_id: taskId,
+            stage_id: STAGE_ID,
+            status: 'running',
+            pipeline_state: { ...state, sceneImagePaths, approvedImages },
+          }, { onConflict: 'task_id,stage_id' });
+        }
       }
     } else {
       approvedImages[sceneNum] = { approved: true };
@@ -207,10 +210,10 @@ export async function runStage4(taskId, tracker, state = {}) {
   const sb2 = getSupabase();
   await sb2.from('video_pipeline_runs').upsert({
     task_id: taskId,
-    stage: STAGE,
+    stage_id: STAGE_ID,
     status: 'completed',
     pipeline_state: { ...state, scenes, sceneImagePaths, approvedImages, tmpDir },
-  }, { onConflict: 'task_id,stage' });
+  }, { onConflict: 'task_id,stage_id' });
 
   console.log(`✅ Stage 4 complete. ${Object.keys(sceneImagePaths).length}/${scenes.length} scenes illustrated`);
   return { ...state, scenes, sceneImagePaths, approvedImages, tmpDir };
