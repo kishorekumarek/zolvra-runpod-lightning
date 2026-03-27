@@ -260,6 +260,9 @@ async function illustrateScene({ taskId, scene, characterMap, tmpDir, tracker, a
     buffer: imageBuffer,
   });
 
+  // 2s delay: let Supabase finish the storage.objects metadata write before hitting DB again
+  await new Promise(r => setTimeout(r, 2000));
+
   // Record in scene_assets
   const sb = getSupabase();
   await sb.from('scene_assets').upsert({
