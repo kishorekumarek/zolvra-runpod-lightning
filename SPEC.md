@@ -6,6 +6,8 @@
 > **NEXUS (ops_tasks board) has been removed — all approvals now go through Telegram via Heimdall bot. Some code samples below still reference NEXUS; these are historical and do not reflect the current pipeline.**
 > **For current truth, see `MEMORY.md` → YouTube Pipeline Learnings & Playbook.**
 
+**⚠️ SUPERSEDED (2026-03-28):** The pipeline schema has been completely rewritten. Stages 0, 1, and 9 are deleted. The authoritative specification is now `docs/pipeline-schema-rewrite.md`. This file is kept for historical reference only — do NOT use it for implementation.
+
 **Author:** Rex (Research & Strategy Agent, Zolvra)
 **Version:** 1.0.0 (OUTDATED)
 **Date:** 2026-03-12  

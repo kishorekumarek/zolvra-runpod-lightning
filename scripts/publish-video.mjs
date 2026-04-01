@@ -70,8 +70,11 @@ async function addToCorrectPlaylist(youtubeVideoId, videoType) {
 /**
  * Ensure #Shorts appears in title and description for short-form videos.
  * Patches the YouTube snippet via API.
+ * @param {string} youtubeVideoId
+ * @param {object} currentSnippet  - snippet fetched from YouTube (may have empty tags)
+ * @param {string[]} [seoTags]     - original tags from youtube_seo (used to preserve them)
  */
-async function patchShortsMetadata(youtubeVideoId, currentSnippet) {
+async function patchShortsMetadata(youtubeVideoId, currentSnippet, seoTags = []) {
   const yt = await getYouTubeClient();
 
   const title = currentSnippet.title.includes('#Shorts')
@@ -82,6 +85,12 @@ async function patchShortsMetadata(youtubeVideoId, currentSnippet) {
     ? currentSnippet.description
     : `${currentSnippet.description}\n\n#Shorts`;
 
+  // Prefer seoTags over currentSnippet.tags — YouTube sometimes returns empty
+  // tags for freshly uploaded videos, which would wipe the original tags.
+  const tags = (seoTags && seoTags.length > 0)
+    ? seoTags
+    : (currentSnippet.tags || []);
+
   await yt.videos.update({
     part: ['snippet'],
     requestBody: {
@@ -90,10 +99,11 @@ async function patchShortsMetadata(youtubeVideoId, currentSnippet) {
         ...currentSnippet,
         title,
         description,
+        tags,
       },
     },
   });
-  console.log('  🏷️  #Shorts added to title + description');
+  console.log(`  🏷️  #Shorts + tags patched (${tags.length} tags)`);
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -187,7 +197,7 @@ async function main() {
       const res = await yt.videos.list({ part: ['snippet'], id: [youtubeVideoId] });
       const snippet = res.data.items?.[0]?.snippet;
       if (snippet) {
-        await patchShortsMetadata(youtubeVideoId, snippet);
+        await patchShortsMetadata(youtubeVideoId, snippet, youtube_seo?.tags || []);
       }
     }
     // Add to correct playlist

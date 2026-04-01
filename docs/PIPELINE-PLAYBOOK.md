@@ -1,7 +1,7 @@
 # YouTube Pipeline Playbook — Tiny Tamil Tales
 
 _Source of truth for autonomous video production. Updated after every episode._
-_Last updated: 2026-03-17 (EP02 "Minmini")_
+_Last updated: 2026-03-28 (schema rewrite)_
 
 ---
 
@@ -11,6 +11,8 @@ Fully autonomous weekly content creation for @tinytamiltales YouTube channel.
 Each episode: concept → script → voice → illustration → animation → assembly → upload → notify.
 Friday orchestrates, Ash executes code changes, Darl reviews final video.
 
+> **Schema rewrite (2026-03-28):** The pipeline schema has been completely rewritten. See `docs/pipeline-schema-rewrite.md` for the authoritative specification.
+
 ---
 
 ## Episode Format
@@ -19,11 +21,28 @@ Friday orchestrates, Ash executes code changes, Darl reviews final video.
 |-----------|-------|
 | Format | YouTube Shorts (9:16 vertical) |
 | Duration | ≤60 seconds |
-| Scenes | 8 per episode |
+| Scenes | 9 per episode (from video-config.mjs) |
 | Language | Colloquial Tamil + Tanglish (diaspora kids) |
 | Audience | Tamil kids 3-7, parents in UAE/UK/US/Canada/Singapore/Australia |
 | Upload status | UNLISTED always — Darl publishes manually |
 | Tags | Always include `#Shorts` in description |
+
+---
+
+## Pipeline Stage Order
+
+> **Stage 0 (Weekly Research) and Stage 1 (Concept Selection) have been removed.**
+> **Stage 1B is now the only entry point into the pipeline.**
+
+The current stage execution order is: **1B → 2 → 3 → 6 → 4 → 5 → 7 → 8**
+
+Note that TTS (Stage 6) now runs **before** illustration (Stage 4), not after.
+
+### How to start
+
+```bash
+node scripts/launch-pipeline-from-story.mjs <story-file> [short|long]
+```
 
 ---
 
@@ -87,13 +106,13 @@ curl -X POST "https://api.elevenlabs.io/v1/text-to-speech/{voiceId}?output_forma
 Before generating any voice samples:
 1. Test each voice ID with a simple Tamil phrase
 2. If 404 → ask Darl for updated voice ID
-3. Generate 1 sample first, verify quality, then batch all 8
+3. Generate 1 sample first, verify quality, then batch all 9
 
 ---
 
 ## Script Writing Rules
 
-1. **8 scenes exactly** — each scene = 1 speaker + 1 dialogue line
+1. **9 scenes exactly** — each scene = 1 speaker + 1 dialogue line
 2. **Colloquial Tamil + Tanglish** — NOT formal/literary Tamil
 3. **Each dialogue:** 10-30 Tamil words max (fits in 5-10s audio)
 4. **Include audio tags** in the dialogue text itself
@@ -108,17 +127,17 @@ Before generating any voice samples:
 ## Assembly Pipeline
 
 ### Inputs
-- 8 scene animations from Supabase `scenes` bucket: `{taskId}/scene_XX_anim.mp4`
-- 8 voice samples from ElevenLabs v3 (local: `output/epXX-samples-v3/`)
+- 9 scene animations from Supabase `scenes` bucket: `{taskId}/scene_XX_anim.mp4`
+- 9 voice samples from ElevenLabs v3 (local: `output/epXX-samples-v3/`)
 - BGM: `assets/bgm/kids_folk_02.mp3`
 - Logo: `assets/channel-logo.png`
 - End card video: `assets/shorts_end_card.mp4`
 - End card audio: `assets/end_card_audio.mp3`
 
 ### Steps
-1. **Download** 8 scene animations from Supabase `scenes` bucket
+1. **Download** 9 scene animations from Supabase `scenes` bucket
 2. **Sync** each scene: trim video to voice duration. If voice > video, loop video with `-stream_loop -1 -shortest`
-3. **Concatenate** all 8 scenes
+3. **Concatenate** all 9 scenes
 4. **Add BGM** at 15% volume: `volume=0.15`, `amix=inputs=2:duration=first`
 5. **Add logo** overlay: top-right, ~12% of video width, 20px padding
 6. **Re-encode** to normalize codec: `libx264 -preset fast -crf 23 -r 30`

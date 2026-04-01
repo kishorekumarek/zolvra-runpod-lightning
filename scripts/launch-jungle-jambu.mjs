@@ -1,216 +1,213 @@
-// scripts/launch-jungle-jambu.mjs — Jungle Jambu series pipeline launcher
+#!/usr/bin/env node
+// scripts/launch-jungle-jambu.mjs — Jungle Jambu series launcher
 //
-// Starts a full pipeline for a Jungle Jambu episode using an existing concept card.
-// Injects the JJ character spec into the concept, runs all stages (with JJ-aware assembly),
-// and marks the video_queue record with series metadata.
+// Wraps launch-pipeline-from-story.mjs without modifying it.
+// Handles JJ-specific DB setup (series columns, character spec side-channel),
+// then spawns the existing launcher via child_process.
 //
-// Usage: node scripts/launch-jungle-jambu.mjs <concept_card_id> <ep_number>
+// Usage:
+//   node scripts/launch-jungle-jambu.mjs <concept_card_id> <ep_number> [--dry-run]
 //
-//   concept_card_id — UUID of an existing row in the concepts table
-//   ep_number       — Episode number (integer), e.g. 1
+// Args:
+//   concept_card_id  UUID of a pre-seeded row in the `concepts` table
+//   ep_number        Integer episode number (e.g. 1)
+//   --dry-run        Print DB writes + spawn command; do NOT execute
 
 import 'dotenv/config';
 import { randomUUID } from 'crypto';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { getSupabase } from '../lib/supabase.mjs';
-import { CostTracker } from '../lib/cost-tracker.mjs';
-import { runStage2 } from '../stages/stage-02-script-gen.mjs';
-import { runStage3 } from '../stages/stage-03-character-prep.mjs';
-import { runStage4 } from '../stages/stage-04-illustrate.mjs';
-import { runStage5 } from '../stages/stage-05-animate.mjs';
-import { runStage6 } from '../stages/stage-06-voice.mjs';
-import { runStage8 } from '../stages/stage-08-review.mjs';
-import { assembleJungleJambu } from './assemble-jungle-jambu.mjs';
-import {
-  getConcept, insertConcept, insertPipelineState,
-  getPipelineState, getYoutubeSeo,
-} from '../lib/pipeline-db.mjs';
-import { PipelineAbortError } from '../lib/telegram.mjs';
 
-// ── Jungle Jambu character spec (injected into concept outline for Stage 2) ──
-const JJ_CHARACTER_SPEC = `
----
-SERIES: Jungle Jambu
-CHARACTER SPEC (inject into every scene):
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = dirname(__filename);
 
-Character: Jungle Jambu
-- Appearance: Chubby man in his 20s, khaki hunter uniform, cross belt, binoculars around neck, rifle/gun, hunter hat.
-- Personality: Overconfident, cowardly, always claims credit for accidents, comic relief.
-- Catchphrase energy: Acts brave → gets outsmarted by animal → chaos → "Ayyo!" → pretends it was his plan.
-- Language: Tanglish (colloquial Tamil + English mix), funny, light.
-- Setting: Indian jungle.
-- Tone: Slapstick situational comedy, 9 scenes per Short.
-- Target audience: Tamil diaspora kids.
----
-`.trim();
+// ── Jungle Jambu character spec (injected into concepts.series_context) ──────
+const JJ_CHARACTER_SPEC = {
+  series: 'jungle_jambu',
+  character_spec: {
+    name:        'Jungle Jambu',
+    appearance:  'Chubby man in his 20s, khaki hunter uniform, cross belt, binoculars around neck, rifle/gun, hunter hat',
+    personality: 'Overconfident, cowardly, always claims credit for accidents, comic relief',
+    catchphrase_energy:
+      'Acts brave → gets outsmarted by animal → chaos → "Ayyo!" → pretends it was his plan',
+    language:   'Tanglish (colloquial Tamil + English), funny, light',
+    setting:    'Indian jungle',
+    tone:       'Slapstick situational comedy, 9 scenes per Short',
+    target_audience:
+      'Tamil diaspora kids (UAE, UK, US, Canada, Singapore, Australia)',
+  },
+};
 
 // ── Parse CLI args ────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
-if (args.length < 2) {
-  console.error('Usage: node scripts/launch-jungle-jambu.mjs <concept_card_id> <ep_number>');
-  process.exit(1);
-}
-const [conceptCardId, epNumberStr] = args;
-const epNumber = parseInt(epNumberStr, 10);
-if (!conceptCardId || isNaN(epNumber)) {
-  console.error('Error: concept_card_id must be a UUID and ep_number must be an integer');
+const dryRun = args.includes('--dry-run');
+const filteredArgs = args.filter(a => a !== '--dry-run');
+
+const [conceptCardId, epNumberStr] = filteredArgs;
+
+if (!conceptCardId || !epNumberStr) {
+  console.error('Usage: node scripts/launch-jungle-jambu.mjs <concept_card_id> <ep_number> [--dry-run]');
   process.exit(1);
 }
 
+const epNumber = parseInt(epNumberStr, 10);
+if (isNaN(epNumber) || epNumber < 1) {
+  console.error(`❌ Invalid ep_number: "${epNumberStr}". Must be a positive integer.`);
+  process.exit(1);
+}
+
+console.log(`\n🦁 Jungle Jambu Launcher — EP${epNumber}`);
+console.log(`   Concept ID: ${conceptCardId}`);
+if (dryRun) console.log('   [DRY-RUN MODE — no DB writes or subprocess spawns]\n');
+
+// ── Main ─────────────────────────────────────────────────────────────────────
 const sb = getSupabase();
 
-// ── Load existing concept card ────────────────────────────────────────────────
-console.log(`\n🦁 Jungle Jambu Series Launcher`);
-console.log(`   Concept card: ${conceptCardId}`);
-console.log(`   Episode:      EP${epNumber}`);
+// 1. Validate concept exists and is not already in-progress
+console.log('  Validating concept row…');
+if (!dryRun) {
+  const { data: concept, error: conceptErr } = await sb
+    .from('concepts')
+    .select('id, title, video_type, status')
+    .eq('id', conceptCardId)
+    .maybeSingle();
 
-const originalConcept = await getConcept(conceptCardId).catch(err => {
-  console.error(`❌ Concept not found (${conceptCardId}): ${err.message}`);
-  process.exit(1);
-});
-
-console.log(`   Concept title: ${originalConcept.title}`);
-
-// ── Create a new enriched concept (JJ spec injected) ─────────────────────────
-const enrichedOutline = [
-  originalConcept.outline || originalConcept.synopsis || '',
-  '',
-  JJ_CHARACTER_SPEC,
-].join('\n').trim();
-
-const enrichedCharacters = Array.from(new Set([
-  ...(originalConcept.characters || []),
-  'jungle jambu',
-]));
-
-const newConceptId = await insertConcept({
-  title:      originalConcept.title,
-  theme:      originalConcept.theme || '',
-  synopsis:   originalConcept.synopsis || '',
-  characters: enrichedCharacters,
-  outline:    enrichedOutline,
-  art_style:  originalConcept.art_style || '3D Pixar animation still',
-  video_type: 'short',
-});
-console.log(`   New concept created: ${newConceptId} (JJ spec injected)`);
-
-// ── Create pipeline ───────────────────────────────────────────────────────────
-const taskId = randomUUID();
-await insertPipelineState(taskId, newConceptId);
-console.log(`   Task ID: ${taskId}`);
-
-// ── Stage runner helper ───────────────────────────────────────────────────────
-async function runStage(stageId, fn, tracker) {
-  console.log(`\n━━━ Stage: ${stageId} ━━━`);
-
-  await sb.from('video_pipeline_runs').upsert({
-    task_id:    taskId,
-    stage_id:   stageId,
-    status:     'running',
-    started_at: new Date().toISOString(),
-  }, { onConflict: 'task_id,stage_id' });
-
-  try {
-    await tracker.checkBudget();
-    await fn(taskId, tracker);
-    await tracker.flush(stageId);
-
-    await sb.from('video_pipeline_runs')
-      .update({ status: 'completed', completed_at: new Date().toISOString() })
-      .eq('task_id', taskId).eq('stage_id', stageId);
-
-    console.log(`✅ Stage ${stageId} complete`);
-  } catch (err) {
-    if (err instanceof PipelineAbortError) {
-      await sb.from('video_pipeline_runs')
-        .update({ status: 'aborted', error: err.message, completed_at: new Date().toISOString() })
-        .eq('task_id', taskId).eq('stage_id', stageId);
-      console.log(`\n🛑 Pipeline aborted at stage ${stageId}: ${err.message}`);
-      process.exit(0);
-    }
-
-    await sb.from('video_pipeline_runs')
-      .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
-      .eq('task_id', taskId).eq('stage_id', stageId);
-    console.error(`❌ Stage ${stageId} failed: ${err.message}`);
-    console.error(`🛑 Pipeline halted. Resume with task_id: ${taskId}`);
+  if (conceptErr) {
+    console.error(`❌ Supabase error reading concept: ${conceptErr.message}`);
     process.exit(1);
   }
-}
-
-// ── Lookup Tamil title from DB after stage 2 ─────────────────────────────────
-async function getEpTitleTamil() {
-  try {
-    const ps = await getPipelineState(taskId);
-    if (ps?.seo_id) {
-      const seo = await getYoutubeSeo(ps.seo_id);
-      if (seo?.title) return seo.title;
-    }
-    // Fallback: use concept title
-    if (ps?.concept_id) {
-      const concept = await getConcept(ps.concept_id);
-      return concept.title || null;
-    }
-  } catch (err) {
-    console.warn(`  ⚠️  Could not fetch Tamil title from DB: ${err.message}`);
+  if (!concept) {
+    console.error(`❌ Concept not found: ${conceptCardId}`);
+    process.exit(1);
   }
-  return null;
-}
+  console.log(`  ✓ Concept: "${concept.title}" (type=${concept.video_type}, status=${concept.status})`);
 
-// ── Run pipeline ──────────────────────────────────────────────────────────────
-console.log(`\n🚀 Starting Jungle Jambu EP${epNumber} pipeline`);
+  if (concept.status === 'in_progress') {
+    // Check for an active pipeline_state row tied to this concept
+    const { data: ps } = await sb
+      .from('pipeline_state')
+      .select('task_id')
+      .eq('concept_id', conceptCardId)
+      .maybeSingle();
+    if (ps?.task_id) {
+      console.error(`❌ Concept already has an active pipeline (task_id: ${ps.task_id}).`);
+      console.error('   Resume it with: node scripts/launch-pipeline-from-story.mjs --resume ' + ps.task_id);
+      process.exit(1);
+    }
+  }
 
-const tracker = new CostTracker(taskId);
+  // 2. Stamp series fields on the concept row + inject character spec
+  console.log('  Updating concept with series context…');
+  const { error: updateConceptErr } = await sb
+    .from('concepts')
+    .update({
+      series:         'jungle_jambu',
+      series_context: JJ_CHARACTER_SPEC,
+    })
+    .eq('id', conceptCardId);
 
-// Stage order: 1B (concept) already done via concept card lookup above.
-// Order mirrors TTT: script → characters → tts → illustrate → animate → assemble → queue
-await runStage('script',     runStage2, tracker);
-await runStage('characters', runStage3, tracker);
-await runStage('tts',        runStage6, tracker);
-await runStage('illustrate', runStage4, tracker);
-await runStage('animate',    runStage5, tracker);
+  if (updateConceptErr) {
+    console.error(`❌ Failed to update concept: ${updateConceptErr.message}`);
+    process.exit(1);
+  }
+  console.log('  ✓ Concept stamped with series=jungle_jambu + character spec');
 
-// JJ-specific assembly (replaces standard stage 7)
-const epTitleTamil = await getEpTitleTamil();
-console.log(`\n━━━ Stage: assemble (Jungle Jambu) ━━━`);
+  // 3. Upsert video_queue pre-seed row
+  //    The pipeline launcher will create/update this row — we just pre-populate the series columns
+  //    so they are set before Stage 1B runs.  We key on concept_id to avoid duplicates.
+  const videoQueuePayload = {
+    concept_id:       conceptCardId,
+    series:           'jungle_jambu',
+    series_ep_number: epNumber,
+    video_type:       'short',
+    status:           'pending',
+  };
 
-await sb.from('video_pipeline_runs').upsert({
-  task_id:    taskId,
-  stage_id:   'assemble',
-  status:     'running',
-  started_at: new Date().toISOString(),
-}, { onConflict: 'task_id,stage_id' });
+  console.log('  Upserting video_queue pre-seed row…');
+  console.log('  Payload:', JSON.stringify(videoQueuePayload, null, 4));
 
-try {
-  await assembleJungleJambu(taskId, epNumber, epTitleTamil);
+  const { data: vqRow, error: vqErr } = await sb
+    .from('video_queue')
+    .upsert(videoQueuePayload, { onConflict: 'concept_id', ignoreDuplicates: false })
+    .select('id')
+    .maybeSingle();
 
-  await sb.from('video_pipeline_runs')
-    .update({ status: 'completed', completed_at: new Date().toISOString() })
-    .eq('task_id', taskId).eq('stage_id', 'assemble');
-  console.log('✅ Stage assemble complete');
-} catch (err) {
-  await sb.from('video_pipeline_runs')
-    .update({ status: 'failed', error: err.message, completed_at: new Date().toISOString() })
-    .eq('task_id', taskId).eq('stage_id', 'assemble');
-  console.error(`❌ Stage assemble failed: ${err.message}`);
-  console.error(`🛑 Pipeline halted. Task ID: ${taskId}`);
-  process.exit(1);
-}
+  if (vqErr) {
+    // If upsert fails due to no unique constraint, fall back to insert
+    console.warn(`  ⚠️  Upsert failed (${vqErr.message}), trying insert…`);
+    const { error: insertErr } = await sb.from('video_queue').insert(videoQueuePayload);
+    if (insertErr) {
+      console.error(`❌ video_queue insert failed: ${insertErr.message}`);
+      process.exit(1);
+    }
+    console.log('  ✓ video_queue row inserted');
+  } else {
+    console.log(`  ✓ video_queue pre-seeded (id: ${vqRow?.id ?? 'n/a'})`);
+  }
 
-await runStage('queue', runStage8, tracker);
+  // 4. Write active_series_context side-channel into pipeline_settings
+  //    Stage 2 wiring task will read this to inject character spec into system prompt.
+  const { error: settingsErr } = await sb
+    .from('pipeline_settings')
+    .upsert(
+      { key: 'active_series_context', value: JJ_CHARACTER_SPEC },
+      { onConflict: 'key' }
+    );
 
-// ── Tag video_queue record with series metadata ───────────────────────────────
-const { error: tagErr } = await sb
-  .from('video_queue')
-  .update({ series: 'jungle_jambu', series_ep_number: epNumber })
-  .eq('task_id', taskId);
-
-if (tagErr) {
-  console.warn(`  ⚠️  Could not update video_queue series fields: ${tagErr.message}`);
+  if (settingsErr) {
+    console.warn(`  ⚠️  pipeline_settings update failed: ${settingsErr.message} (non-fatal)`);
+  } else {
+    console.log('  ✓ active_series_context side-channel set in pipeline_settings');
+  }
 } else {
-  console.log(`  ✓ video_queue tagged: series=jungle_jambu, ep=${epNumber}`);
+  // dry-run: print what would happen
+  console.log('\n  [DRY-RUN] Would update concepts set:');
+  console.log('    series = "jungle_jambu"');
+  console.log('    series_context =', JSON.stringify(JJ_CHARACTER_SPEC, null, 6));
+  console.log('\n  [DRY-RUN] Would upsert video_queue:');
+  console.log('    concept_id =', conceptCardId);
+  console.log('    series = "jungle_jambu"');
+  console.log('    series_ep_number =', epNumber);
+  console.log('    video_type = "short"');
+  console.log('    status = "pending"');
+  console.log('\n  [DRY-RUN] Would set pipeline_settings:');
+  console.log('    key = "active_series_context"');
+  console.log('    value =', JSON.stringify(JJ_CHARACTER_SPEC, null, 6));
 }
 
-const finalCost = await tracker.totalSpent();
-console.log(`\n🎉 Jungle Jambu EP${epNumber} pipeline complete! Total cost: $${finalCost.toFixed(4)}`);
-console.log(`   Task ID: ${taskId}`);
-console.log(`   Publish: node scripts/publish-video.mjs ${taskId}\n`);
+// 5. Spawn existing launcher with --resume handoff
+//    The launcher uses concept_id to find/create the pipeline_state row.
+//    We provide the story file path so Stage 1B can seed from it if needed.
+const launcherPath = join(__dirname, 'launch-pipeline-from-story.mjs');
+const spawnArgs    = ['--resume', conceptCardId];
+
+console.log(`\n  Spawning: node ${launcherPath} ${spawnArgs.join(' ')}`);
+
+if (dryRun) {
+  console.log('\n  [DRY-RUN] ✓ Spawn skipped. Would execute:');
+  console.log(`    node scripts/launch-pipeline-from-story.mjs --resume ${conceptCardId}`);
+  console.log('\n✅ Dry-run complete — no changes made.');
+  process.exit(0);
+}
+
+const child = spawn(process.execPath, [launcherPath, ...spawnArgs], {
+  stdio: 'inherit',
+  env:   process.env,
+  cwd:   join(__dirname, '..'),
+});
+
+child.on('error', err => {
+  console.error(`❌ Failed to spawn launcher: ${err.message}`);
+  process.exit(1);
+});
+
+child.on('exit', (code, signal) => {
+  if (code === 0) {
+    console.log(`\n✅ Jungle Jambu EP${epNumber} pipeline completed.`);
+  } else {
+    console.error(`\n❌ Pipeline exited with code ${code} (signal: ${signal})`);
+    process.exit(code ?? 1);
+  }
+});

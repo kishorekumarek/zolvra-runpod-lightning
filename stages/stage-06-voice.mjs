@@ -1,5 +1,6 @@
 // stages/stage-06-voice.mjs — ElevenLabs TTS per scene with v3 audio tag enhancement
-// Enhances dialogue → per-scene approval loop → TTS generation
+// REWRITTEN for pipeline schema rewrite: reads from DB, uploads audio to storage, writes to scenes table.
+// Dual-write: also returns old sceneAudioPaths for un-rewritten Stage 7.
 import 'dotenv/config';
 import { promises as fs } from 'fs';
 import { join } from 'path';
@@ -11,14 +12,17 @@ import { VOICE_MAP, V3_VOICE_SETTINGS } from '../lib/voice-config.mjs';
 import { enhanceDialoguesForTTS, enhanceSingleDialogue } from '../lib/dialogue-enhancer.mjs';
 import { sendApprovalBotMedia, sendTelegramMessageWithButtons, waitForTelegramResponse } from '../lib/telegram.mjs';
 import { recordVoiceFeedback } from '../lib/feedback-engine.mjs';
+import { uploadSceneAudio } from '../lib/storage.mjs';
+import {
+  getScenes, getEpisodeCharacter, updateScene,
+} from '../lib/pipeline-db.mjs';
 
 const STAGE = 6;
 const STAGE_ID = 'tts';
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
 /**
- * Call ElevenLabs TTS v3 — emotion is controlled via audio tags in the text,
- * NOT via voice_settings (which must be empty {}).
+ * Call ElevenLabs TTS v3.
  * Returns a Buffer of the MP3.
  */
 async function callElevenLabs({ text, voiceId }) {
@@ -36,7 +40,7 @@ async function callElevenLabs({ text, voiceId }) {
       body: JSON.stringify({
         text,
         model_id: 'eleven_v3',
-        voice_settings: V3_VOICE_SETTINGS,  // Must be {} for v3
+        voice_settings: V3_VOICE_SETTINGS,
       }),
     }
   );
@@ -58,41 +62,49 @@ async function callElevenLabs({ text, voiceId }) {
 /**
  * Stage 6: Enhance dialogue with v3 tags → per-scene TTS + approval loop.
  *
- * Flow per scene:
- *   1. Enhance dialogue with v3 audio tags (batch Haiku call for all, then per-scene on redo)
- *   2. Generate TTS audio
- *   3. Send enhanced text + audio to Telegram for approval
- *   4. If denied → record feedback, apply modification, re-enhance, re-generate
- *   5. If approved → mark done, move to next scene
- *
- * Resume-safe: already-approved scenes (in state.approvedSceneAudio) are skipped.
+ * NEW: reads scenes + episode_characters from DB, uploads audio to storage,
+ * writes audio_url/enhanced_text/audio_status to scenes table.
+ * Writes audio_url/enhanced_text/audio_status/audio_approved to scenes table.
  */
 export async function runStage6(taskId, tracker, state = {}) {
   console.log('🎙️  Stage 6: Voice generation...');
 
-  const { scenes, characterMap } = state;
-  if (!scenes) throw new Error('Stage 6: scenes not found');
-  let { tmpDir } = state;
-  if (!tmpDir) {
-    tmpDir = `/tmp/zolvra-pipeline/${taskId}`;
-    console.log('  [Stage 6] Creating tmpDir:', tmpDir);
+  const sb = getSupabase();
+
+  // ── Read scenes from DB ────────────────────────────────────────────
+  const allScenes = await getScenes(taskId);
+  if (!allScenes || allScenes.length === 0) throw new Error('Stage 6: no scenes found in DB');
+
+  // Filter to scenes that still need audio
+  const scenesNeedingAudio = allScenes.filter(s => s.audio_status !== 'completed');
+  const scenesAlreadyDone = allScenes.filter(s => s.audio_status === 'completed');
+
+  if (scenesAlreadyDone.length > 0) {
+    console.log(`  ↩️  Resume: ${scenesAlreadyDone.length} scenes already have audio — skipping`);
   }
 
-  const sb = getSupabase();
+  let tmpDir = state.tmpDir;
+  if (!tmpDir) {
+    tmpDir = `/tmp/zolvra-pipeline/${taskId}`;
+  }
   const audioDir = join(tmpDir, 'audio');
   await fs.mkdir(audioDir, { recursive: true });
 
-  // Resume support: load previously approved scenes
-  const approvedSceneAudio = state.approvedSceneAudio || {};
-  const enhancedSceneTexts = state.enhancedSceneTexts || {};
-  const sceneAudioPaths = state.sceneAudioPaths || {};
+  const sceneAudioPaths = {}; // local paths for within-run use only
+  const enhancedSceneTexts = {};
+  const approvedSceneAudio = {};
   let totalChars = 0;
 
-  // Step 1: Batch enhance all scenes that haven't been enhanced yet
-  const scenesToEnhance = scenes.filter(s => !enhancedSceneTexts[s.scene_number]);
-  if (scenesToEnhance.length > 0) {
-    console.log(`  Enhancing ${scenesToEnhance.length} scene dialogues for v3 TTS...`);
-    const newEnhanced = await enhanceDialoguesForTTS(scenesToEnhance);
+  // Pre-populate dual-write maps from already-completed scenes
+  for (const s of scenesAlreadyDone) {
+    approvedSceneAudio[s.scene_number] = { approved: true };
+    if (s.enhanced_text) enhancedSceneTexts[s.scene_number] = s.enhanced_text;
+  }
+
+  // Step 1: Batch enhance all scenes that need audio
+  if (scenesNeedingAudio.length > 0) {
+    console.log(`  Enhancing ${scenesNeedingAudio.length} scene dialogues for v3 TTS...`);
+    const newEnhanced = await enhanceDialoguesForTTS(scenesNeedingAudio);
     Object.assign(enhancedSceneTexts, newEnhanced);
     console.log(`  ✓ ${Object.keys(newEnhanced).length} scenes enhanced with audio tags`);
   }
@@ -100,53 +112,61 @@ export async function runStage6(taskId, tracker, state = {}) {
   const feedbackMode = await isFeedbackCollectionMode();
 
   // Step 2: Per-scene TTS generation + approval loop
-  for (const scene of scenes) {
+  for (const scene of allScenes) {
     const sceneNum = scene.scene_number;
     const sceneLabel = String(sceneNum).padStart(2, '0');
 
-    // Skip already-approved scenes (resume support)
-    if (approvedSceneAudio[sceneNum]?.approved) {
-      console.log(`  Scene ${sceneNum}: already approved — skipping`);
-      if (approvedSceneAudio[sceneNum].audioPath) {
-        sceneAudioPaths[sceneNum] = approvedSceneAudio[sceneNum].audioPath;
+    // Skip already-completed scenes (resume support — from DB)
+    if (scene.audio_status === 'completed') {
+      // Ensure local file exists for dual-write
+      if (scene.audio_url && !sceneAudioPaths[sceneNum]) {
+        const audioPath = join(audioDir, `scene_${sceneLabel}_audio.mp3`);
+        sceneAudioPaths[sceneNum] = audioPath;
       }
       continue;
     }
 
-    // Look up voice: prefer characterVoiceMap (lightweight, survives restarts) →
-    // fall back to characterMap DB voice_id → character_library table → VOICE_MAP → default narrator.
-    // Skip PLACEHOLDER voice IDs (legacy characters not yet assigned).
-    const { characterVoiceMap } = state;
-    const lightweightVoiceId = characterVoiceMap?.[scene.speaker]
-      ?? characterVoiceMap?.[scene.speaker?.toLowerCase()];
-    const charEntry = characterMap?.[scene.speaker] ?? characterMap?.[scene.speaker?.toLowerCase()];
-    const dbVoiceId = lightweightVoiceId || charEntry?.voice_id;
+    // ── Resolve voice ID ─────────────────────────────────────────────
+    // Priority: episode_characters → character_library → VOICE_MAP → default
+    let voiceId = null;
 
-    // Resolve voice ID with character_library fallback (handles state loss on pipeline resume)
-    let voiceId = (dbVoiceId && dbVoiceId !== 'PLACEHOLDER') ? dbVoiceId : null;
+    // Try episode_characters first (new table)
+    const epChar = await getEpisodeCharacter(taskId, scene.speaker);
+    if (epChar?.voice_id && epChar.voice_id !== 'PLACEHOLDER') {
+      voiceId = epChar.voice_id;
+    }
+
+    // Fallback: character_library
     if (!voiceId && scene.speaker && scene.speaker !== 'narrator') {
       const { data: charRow } = await sb
         .from('character_library')
         .select('voice_id')
         .ilike('name', scene.speaker)
         .limit(1)
-        .single();
-      if (charRow?.voice_id) {
+        .maybeSingle();
+      if (charRow?.voice_id && charRow.voice_id !== 'PLACEHOLDER') {
         voiceId = charRow.voice_id;
         console.log(`  🔍 voice_id for "${scene.speaker}" resolved from character_library: ${voiceId}`);
       }
     }
+
+    // Fallback: hardcoded VOICE_MAP
     if (!voiceId) {
-      console.warn(`  ⚠️  No voice_id for "${scene.speaker}" — using default narrator voice`);
       voiceId = VOICE_MAP[scene.speaker?.toLowerCase()] || VOICE_MAP.narrator || VOICE_MAP.default || Object.values(VOICE_MAP)[0];
+      if (!voiceId) {
+        console.warn(`  ⚠️  No voice_id for "${scene.speaker}" — cannot generate TTS`);
+        await updateScene(taskId, sceneNum, { audio_status: 'failed' });
+        continue;
+      }
     }
+
     let enhancedText = enhancedSceneTexts[sceneNum] || `[${scene.emotion}] ${scene.text}`;
     let approved = false;
 
     while (!approved) {
       console.log(`  Scene ${sceneNum}: speaker=${scene.speaker}, enhanced="${enhancedText.slice(0, 80)}..."`);
 
-      // Generate TTS with enhanced text
+      // Generate TTS
       const audioBuffer = await withRetry(
         () => callElevenLabs({ text: enhancedText, voiceId }),
         { maxRetries: 3, baseDelayMs: 10000, stage: STAGE, taskId }
@@ -154,33 +174,54 @@ export async function runStage6(taskId, tracker, state = {}) {
 
       const audioPath = join(audioDir, `scene_${sceneLabel}_audio.mp3`);
       await fs.writeFile(audioPath, audioBuffer);
-      sceneAudioPaths[sceneNum] = audioPath;
       totalChars += enhancedText.length;
       console.log(`  ✓ Scene ${sceneNum} TTS generated`);
 
+      // NEW: upload audio to Supabase Storage
+      let audioUrl = null;
+      try {
+        audioUrl = await uploadSceneAudio({ videoId: taskId, sceneNumber: sceneNum, buffer: audioBuffer });
+        console.log(`  ✓ Scene ${sceneNum} audio uploaded to storage`);
+      } catch (uploadErr) {
+        console.warn(`  ⚠️  Scene ${sceneNum} audio upload failed (non-fatal): ${uploadErr.message}`);
+      }
+
       if (!feedbackMode) {
-        // Auto-mode: no per-scene approval, just generate and move on
+        // Auto-mode: no approval, mark done
+        await updateScene(taskId, sceneNum, {
+          audio_url: audioUrl,
+          enhanced_text: enhancedText,
+          audio_status: 'completed',
+          audio_approved: true,
+        });
+        sceneAudioPaths[sceneNum] = audioPath;
         approvedSceneAudio[sceneNum] = { audioPath, approved: true };
         enhancedSceneTexts[sceneNum] = enhancedText;
         approved = true;
         continue;
       }
 
-      // Feedback collection mode: send for approval
+      // Feedback mode: send for approval
       const caption = `Scene ${sceneNum} (${scene.speaker}, ${scene.emotion}): ${enhancedText.slice(0, 200)}`;
       await sendApprovalBotMedia({ filePath: audioPath, type: 'audio', caption });
 
-      // Send approve/reject buttons via Telegram (prefixed callback)
       const callbackPrefix = `s6_${sceneNum}`;
       const telegramMessageId = await sendTelegramMessageWithButtons(
-        `🎙️ Scene ${sceneNum}/${scenes.length} Voice Review\nApprove or reject with feedback (reply "text: ..." to replace dialogue)`,
+        `🎙️ Scene ${sceneNum}/${allScenes.length} Voice Review\nApprove or reject with feedback (reply "text: ..." to replace dialogue)`,
         callbackPrefix
       );
 
-      // Wait for response from Telegram
       const decision = await waitForTelegramResponse(telegramMessageId, callbackPrefix);
 
       if (decision.approved) {
+        // NEW: update scenes table
+        await updateScene(taskId, sceneNum, {
+          audio_url: audioUrl,
+          enhanced_text: enhancedText,
+          audio_status: 'completed',
+          audio_approved: true,
+        });
+        sceneAudioPaths[sceneNum] = audioPath;
         approvedSceneAudio[sceneNum] = { audioPath, approved: true };
         enhancedSceneTexts[sceneNum] = enhancedText;
         approved = true;
@@ -197,15 +238,13 @@ export async function runStage6(taskId, tracker, state = {}) {
           enhancedText,
         });
 
-        // Check if the comment contains a dialogue replacement (support both stage-2 and stage-6 conventions)
         const dialogueMatch = decision.comment?.match(/(?:change (?:dialogue|text) to|^text:)[:\s]+["']?(.+?)["']?\s*$/i);
         if (dialogueMatch) {
-          // User provided new dialogue text — re-enhance with new text (original scene.text preserved)
           const modifiedScene = { ...scene, text: dialogueMatch[1].trim() };
           enhancedText = await enhanceSingleDialogue(modifiedScene);
+          // Also update the scene text in DB
+          await updateScene(taskId, sceneNum, { text: modifiedScene.text });
         } else {
-          // User gave feedback about delivery — re-enhance with feedback context
-          // Pass feedback as visual_description suffix so Haiku can see it in the prompt
           enhancedText = await enhanceSingleDialogue({
             ...scene,
             emotion: extractEmotionHint(decision.comment) || scene.emotion,
@@ -214,14 +253,6 @@ export async function runStage6(taskId, tracker, state = {}) {
         }
         enhancedSceneTexts[sceneNum] = enhancedText;
       }
-
-      // Save intermediate state for resume safety
-      await sb.from('video_pipeline_runs').upsert({
-        task_id: taskId,
-        stage_id: STAGE_ID,
-        status: 'in_progress',
-        pipeline_state: { ...state, enhancedSceneTexts, approvedSceneAudio, sceneAudioPaths },
-      }, { onConflict: 'task_id,stage_id' });
     }
   }
 
@@ -230,12 +261,11 @@ export async function runStage6(taskId, tracker, state = {}) {
   console.log(`  TTS total: ${totalChars} chars = $${cost.toFixed(4)}`);
 
   console.log(`✅ Stage 6 complete. ${Object.keys(sceneAudioPaths).length} scenes voiced`);
-  return { ...state, sceneAudioPaths, enhancedSceneTexts, approvedSceneAudio };
+
 }
 
 /**
  * Try to extract an emotion hint from feedback comment.
- * e.g., "make it more excited" → "excited", "too flat" → "excited"
  */
 function extractEmotionHint(comment) {
   if (!comment) return null;
@@ -256,7 +286,6 @@ function extractEmotionHint(comment) {
     if (keywords.some(kw => lower.includes(kw))) return emotion;
   }
 
-  // "too flat" → default to excited for more expression
   if (lower.includes('flat') || lower.includes('monotone') || lower.includes('boring')) {
     return 'excited';
   }

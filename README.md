@@ -10,16 +10,16 @@ Built by **Ash** (Zolvra engineering agent) from Rex's SPEC.md.
 
 | Stage | Name | Human Gate? | Cost |
 |-------|------|-------------|------|
-| 0 | Weekly Research | ❌ Cron | $0 |
-| 1 | Concept Selection | ✅ Darl | $0 |
+| 1B | Story Intake | ✅ Darl | $0 |
 | 2 | Script Generation | ✅ Darl | ~$0.01 |
 | 3 | Character Prep | Auto (feedback mode: ✅) | $0 |
-| 4 | Scene Illustration | Auto (feedback mode: ✅) | ~$0.04 |
-| 5 | Animation (Kling) | Auto (feedback mode: ✅) | ~$1.40 |
 | 6 | Tamil Voice (TTS) | Auto (feedback mode: ✅) | ~$0.72 |
+| 4 | Scene Illustration | Auto (feedback mode: ✅) | ~$0.04 |
+| 5 | Animation (Wan 2.6) | Auto (feedback mode: ✅) | ~$1.40 |
 | 7 | Assembly (ffmpeg) | Auto (feedback mode: ✅) | $0 |
 | 8 | Human Review | ✅ Darl | $0 |
-| 9 | Publish + Feedback | ✅ Final confirmation | $0 |
+
+Stage order: **1B → 2 → 3 → 6 → 4 → 5 → 7 → 8** (TTS runs before illustration so voice timing informs scene composition).
 
 **Estimated cost per video: ~$2.16**
 **Budget target: $8 | Hard cap: $10 (pipeline halts)**
@@ -49,15 +49,14 @@ node scripts/seed-character-library.mjs
 node scripts/test-connections.mjs
 ```
 
-### 5. Run weekly research (generates story concepts)
+### 5. Launch the pipeline from a story
 ```bash
-node stages/stage-00-research.mjs
+node scripts/launch-pipeline-from-story.mjs <story-file> [short|long] [task_id]
+# Or from stdin:
+cat story.txt | node scripts/launch-pipeline-from-story.mjs - [short|long]
 ```
 
-### 6. Start pipeline (after concept approved)
-```bash
-node scripts/run-pipeline.mjs <task_id> [start_stage]
-```
+This is the single entry point. Pass `[short|long]` for video format (default: short). Pass an existing `task_id` to resume a crashed pipeline.
 
 ---
 
@@ -65,49 +64,72 @@ node scripts/run-pipeline.mjs <task_id> [start_stage]
 
 ```
 streams/youtube/
-├── pipeline/
-│   └── orchestrator.mjs        # Main entry — runs all stages in sequence
 ├── stages/
-│   ├── stage-00-research.mjs   # Weekly cron: trends → story concepts
-│   ├── stage-01-concept-select.mjs  # Concept approval, emit task_id
+│   ├── stage-01b-story-intake.mjs   # Accept story text, create task
 │   ├── stage-02-script-gen.mjs      # Claude API → JSON script → Telegram review
 │   ├── stage-03-character-prep.mjs  # Resolve characters from library
-│   ├── stage-04-illustrate.mjs      # Scene images via Google AI Imagen
-│   ├── stage-05-animate.mjs         # Kling image-to-video per scene
 │   ├── stage-06-voice.mjs           # ElevenLabs TTS per line
+│   ├── stage-04-illustrate.mjs      # Scene images via Google AI Imagen
+│   ├── stage-05-animate.mjs         # Wan 2.6 image-to-video per scene
 │   ├── stage-07-assemble.mjs        # ffmpeg assembly
-│   ├── stage-08-review.mjs          # Upload unlisted, notify via Telegram
-│   └── stage-09-publish.mjs         # Publish to YouTube + feedback loop
+│   └── stage-08-review.mjs          # Upload unlisted, notify via Telegram
 ├── lib/
+│   ├── pipeline-db.mjs         # DB helpers (concepts, scenes, video_output, etc.)
+│   ├── parse-claude-json.mjs   # Robust JSON extraction from Claude responses
+│   ├── character-approval.mjs  # Character review + approval flow
 │   ├── supabase.mjs            # Supabase client singleton
 │   ├── settings.mjs            # getSetting() / setSetting()
 │   ├── cost-tracker.mjs        # CostTracker class + BudgetCapExceededError
 │   ├── retry.mjs               # withRetry() with exponential backoff
-│   ├── nexus-client.mjs        # (legacy — unused, kept as dead code)
 │   ├── image-gen.mjs           # Google AI Imagen wrapper
-│   ├── motion-params.mjs       # Kling motion type → params
-│   ├── kling.mjs               # Kling API wrapper + polling
+│   ├── wan.mjs                 # Wan 2.6 video generation wrapper
 │   ├── tts.mjs                 # ElevenLabs TTS + SSML builder
 │   ├── tts-takes.mjs           # 2-take generation + auto-select
-│   ├── youtube.mjs             # YouTube Data API wrapper
+│   ├── ffmpeg.mjs              # ffmpeg assembly helpers
 │   ├── storage.mjs             # Supabase Storage helpers
+│   ├── youtube.mjs             # YouTube Data API wrapper
+│   ├── telegram.mjs            # Telegram bot helpers
 │   ├── feedback-engine.mjs     # Feedback analysis + prompt updater
-│   └── ffmpeg.mjs              # ffmpeg assembly helpers
+│   ├── stage-ids.mjs           # Stage ID constants
+│   └── ...                     # Additional helpers (bgm, sfx, voice-config, etc.)
 ├── scripts/
-│   ├── run-db-migration.mjs    # Run SQL migrations
-│   ├── seed-pipeline-settings.mjs   # Insert default settings
-│   ├── seed-character-library.mjs   # Insert initial characters
-│   ├── run-pipeline.mjs             # Manual pipeline trigger
-│   └── test-connections.mjs         # Test all 6 APIs
+│   ├── launch-pipeline-from-story.mjs  # Single launcher (main entry point)
+│   ├── run-db-migration.mjs
+│   ├── seed-pipeline-settings.mjs
+│   ├── seed-character-library.mjs
+│   ├── test-connections.mjs
+│   ├── publish-video.mjs
+│   ├── pull-channel-analytics.mjs
+│   ├── download-audio.mjs
+│   ├── download-sfx.mjs
+│   └── archive/                     # 34 archived scripts
+├── supabase/migrations/
+│   ├── 20260326_rename_video_path_col.sql
+│   ├── 20260327_add_stage_id_column.sql
+│   ├── 20260327_drop_stage_integer_col.sql
+│   ├── 20260328_pipeline_schema_rewrite_phase1.sql  # New tables (run)
+│   └── 20260328_pipeline_schema_rewrite_phase2.sql  # Drop old tables (pending)
 ├── migrations/
-│   └── 001_create_tables.sql   # Full schema
-├── cron/
-│   ├── weekly-research.cron    # Mon 08:00 GST
-│   └── cleanup-tmp.cron        # Daily midnight cleanup
+│   └── 001_create_tables.sql
 ├── .env                        # Secrets (gitignored)
 ├── .env.example                # Template
 └── package.json
 ```
+
+---
+
+## Database Schema
+
+Key tables:
+
+| Table | Purpose |
+|-------|---------|
+| `concepts` | Story concepts and intake metadata |
+| `scenes` | Per-scene script data (dialogue, actions, timing) |
+| `youtube_seo` | Title, description, tags, thumbnail metadata |
+| `episode_characters` | Characters assigned to an episode |
+| `video_output` | Final rendered video paths and upload status |
+| `pipeline_state` | Stage progress, cost tracking, error state |
 
 ---
 
@@ -126,9 +148,9 @@ All pipeline approvals go through Telegram via Heimdall (dedicated approval bot 
 
 ## Feedback Collection Mode
 
-For the **first 10 videos**, every automated stage (3–7) sends assets to Telegram for Darl's review. This builds the dataset to calibrate the AI systems.
+For the **first 10 videos**, every automated stage (3-7) sends assets to Telegram for Darl's review. This builds the dataset to calibrate the AI systems.
 
-After 10 videos, stages 3–7 run automatically with quality gates. Stages 1, 2, and 8 remain human-gated **permanently**.
+After 10 videos, stages 3-7 run automatically with quality gates. Stages 1B, 2, and 8 remain human-gated **permanently**.
 
 Settings controlling this:
 ```
@@ -141,7 +163,7 @@ feedback_collection_completed: 0-N
 
 ## Budget Hard Cap
 
-The pipeline tracks USD spend per stage in `video_pipeline_runs.cost_usd`.
+The pipeline tracks USD spend per stage in `pipeline_state.cost_usd`.
 
 - **Target ($8):** Warning logged, pipeline continues
 - **Hard cap ($10):** `BudgetCapExceededError` thrown, pipeline **halts immediately**
@@ -157,28 +179,13 @@ See `.env.example` for all required variables.
 Key services:
 - **Supabase** — Database + Storage
 - **Google AI** — Scene image generation (Imagen)
-- **kie.ai** — Kling video animation
+- **Wan 2.6** — Video animation
 - **ElevenLabs** — Tamil TTS (multilingual v2)
 - **YouTube Data API** — Upload + publish
 - **Pixabay** — Background music pool
 
 ---
 
-## Cron Setup
-
-```bash
-# View current crontab
-crontab -l
-
-# Add weekly research job
-crontab -e
-# Add: 0 4 * * 1 cd /Users/friday/.openclaw/workspace/streams/youtube && node stages/stage-00-research.mjs >> /tmp/youtube-research.log 2>&1
-
-# Add daily cleanup
-# Add: 0 0 * * * find /tmp/zolvra-pipeline -mindepth 1 -maxdepth 1 -type d -mtime +2 -exec rm -rf {} + 2>/dev/null || true
-```
-
----
-
-*Built by Ash — Zolvra Engineering Agent*  
+*Built by Ash — Zolvra Engineering Agent*
 *Spec authored by Rex — Zolvra Research Agent*
+*Last updated: 2026-03-28*

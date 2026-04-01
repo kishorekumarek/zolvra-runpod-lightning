@@ -1,69 +1,60 @@
-// stages/stage-08-review.mjs — Finalize + store locally in video_queue (no YouTube upload)
-// Producer stage: copy final video to persistent local output folder, insert into video_queue,
-// send Telegram notification. YouTube upload happens separately via scripts/publish-video.mjs.
+// stages/stage-08-review.mjs — Finalize + store in video_queue (no YouTube upload)
+// REWRITTEN for pipeline schema rewrite: reads from DB via pipeline_state FKs.
 import 'dotenv/config';
 import { promises as fs } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { getSupabase } from '../lib/supabase.mjs';
-import { getVideoType } from '../lib/settings.mjs';
 import { sendTelegramMessage } from '../lib/telegram.mjs';
+import {
+  getPipelineState, getConcept, getYoutubeSeo, getVideoOutput,
+} from '../lib/pipeline-db.mjs';
 
 const STAGE = 8;
-const __dirname = dirname(fileURLToPath(import.meta.url));
-// Persistent output folder — survives /tmp cleanup
-const OUTPUT_DIR = join(__dirname, '..', 'output');
 
 /**
- * Stage 8: Copy final video to persistent local output folder,
- * insert a row into `video_queue`, notify Telegram.
- * Does NOT upload to YouTube — that happens via publish-video.mjs on demand.
- * Storage: local filesystem (streams/youtube/output/{taskId}/final.mp4)
+ * Stage 8: Read final video + metadata from DB, insert into video_queue,
+ * notify Telegram. Does NOT upload to YouTube — that happens via publish-video.mjs.
+ *
+ * NEW: reads everything from DB. No in-memory state dependencies.
  */
 export async function runStage8(taskId, tracker, state = {}) {
   console.log('📦 Stage 8: Finalize + store in video queue...');
 
-  const { script, finalVideoPath, finalDurationSeconds, thumbnailPath } = state;
-  if (!script) throw new Error('Stage 8: script not found');
-  if (!finalVideoPath) throw new Error('Stage 8: finalVideoPath not found');
-
   const sb = getSupabase();
-  const videoType = state.videoType ?? await getVideoType();
 
-  // ── 1. Copy final video to persistent local output folder ───────────
-  const outputDir = join(OUTPUT_DIR, taskId);
-  await fs.mkdir(outputDir, { recursive: true });
-  const localVideoPath = join(outputDir, 'final.mp4');
-  console.log(`  💾 Saving to persistent storage: ${localVideoPath}`);
-  await fs.copyFile(finalVideoPath, localVideoPath);
-  console.log(`  ✓ Video saved (${((await fs.stat(localVideoPath)).size / 1024 / 1024).toFixed(1)}MB)`);
+  // ── Read from DB ───────────────────────────────────────────────────
+  const ps = await getPipelineState(taskId);
+  if (!ps) throw new Error('Stage 8: pipeline_state not found');
 
-  // ── 2. Copy thumbnail if present ────────────────────────────────────
-  let localThumbnailPath = null;
-  if (thumbnailPath) {
-    try {
-      localThumbnailPath = join(outputDir, 'thumbnail.jpg');
-      await fs.copyFile(thumbnailPath, localThumbnailPath);
-      console.log(`  ✓ Thumbnail saved`);
-    } catch (err) {
-      console.warn(`  ⚠️  Thumbnail copy failed (non-fatal): ${err.message}`);
-      localThumbnailPath = null;
-    }
+  const concept = await getConcept(ps.concept_id);
+  const videoType = concept.video_type || 'short';
+
+  if (!ps.youtube_seo_id) throw new Error('Stage 8: youtube_seo_id not set in pipeline_state');
+  const seo = await getYoutubeSeo(ps.youtube_seo_id);
+
+  if (!ps.video_output_id) throw new Error('Stage 8: video_output_id not set in pipeline_state — did Stage 7 complete?');
+  const videoOutput = await getVideoOutput(ps.video_output_id);
+
+  if (!videoOutput.local_video_path) throw new Error('Stage 8: local_video_path not set in video_output');
+
+  // Verify local file exists
+  try {
+    await fs.access(videoOutput.local_video_path);
+  } catch {
+    throw new Error(`Stage 8: final video file not found at ${videoOutput.local_video_path}`);
   }
 
-  // Stub for compatibility (no Supabase path needed)
-  // ── 3. Insert into video_queue ───────────────────────────────────────
-  const title = script.youtube_seo?.title || script.metadata?.title || `Episode ${taskId.slice(0, 8)}`;
-  const youtubeSeо = script.youtube_seo || {};
+  const title = seo.title || `Episode ${taskId.slice(0, 8)}`;
+  const finalDurationSeconds = videoOutput.final_duration_seconds;
 
+  // ── Insert into video_queue ────────────────────────────────────────
   const { error: insertErr } = await sb.from('video_queue').insert({
-    task_id:                  taskId,
+    task_id:          taskId,
     title,
-    video_type:               videoType,
-    local_video_path:         localVideoPath,   // local filesystem path
-    supabase_thumbnail_path:  localThumbnailPath,
-    youtube_seo:              youtubeSeо,
-    status:                   'ready',
+    video_type:       videoType,
+    local_video_path: videoOutput.local_video_path,
+    video_url:        videoOutput.video_url || null,
+    youtube_seo:      { title: seo.title, description: seo.description, tags: seo.tags },
+    status:           'ready',
   });
 
   if (insertErr) {
@@ -71,11 +62,11 @@ export async function runStage8(taskId, tracker, state = {}) {
       console.warn('  ℹ️  video_queue row already exists — updating...');
       await sb.from('video_queue').update({
         title,
-        video_type:               videoType,
-        local_video_path:         localVideoPath,
-        supabase_thumbnail_path:  localThumbnailPath,
-        youtube_seo:              youtubeSeо,
-        status:                   'ready',
+        video_type:       videoType,
+        local_video_path: videoOutput.local_video_path,
+        video_url:        videoOutput.video_url || null,
+        youtube_seo:      { title: seo.title, description: seo.description, tags: seo.tags },
+        status:           'ready',
       }).eq('task_id', taskId);
     } else {
       throw new Error(`Failed to insert into video_queue: ${insertErr.message}`);
@@ -83,27 +74,15 @@ export async function runStage8(taskId, tracker, state = {}) {
   }
   console.log(`  ✓ video_queue row inserted (status=ready, type=${videoType})`);
 
-  // ── 4. Notify Telegram ───────────────────────────────────────────────
+  // ── Notify Telegram ────────────────────────────────────────────────
   const durationStr = finalDurationSeconds ? `${finalDurationSeconds.toFixed(1)}s` : '?';
   await sendTelegramMessage(
     `🎬 ${title} ready for review!\n\n` +
     `📁 Saved locally (${videoType}, ${durationStr})\n` +
-    `📂 ${localVideoPath}\n\n` +
+    `📂 ${videoOutput.local_video_path}\n\n` +
     `Run \`node scripts/publish-video.mjs ${taskId}\` to upload to YouTube.`
   );
 
-  // ── 6. Update pipeline run status ───────────────────────────────────
-  await sb.from('video_pipeline_runs')
-    .update({ status: 'awaiting_publish' })
-    .eq('task_id', taskId)
-    .eq('stage_id', 'queue');
-
   console.log('✅ Stage 8 complete. Video queued — pipeline closed. Publish via publish-video.mjs when ready.');
 
-  return {
-    ...state,
-    localVideoPath,
-    localThumbnailPath,
-    queueStatus: 'ready',
-  };
 }

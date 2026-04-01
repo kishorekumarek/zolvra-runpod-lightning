@@ -1,13 +1,21 @@
 // stages/stage-02-script-gen.mjs — Claude generates flat scene array → Telegram review
+// REWRITTEN for pipeline schema rewrite: reads concept from DB, writes to scenes + youtube_seo tables.
+// Dual-write: also writes old pipeline_state JSONB + returns old state format for un-rewritten stages.
 import 'dotenv/config';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getSupabase } from '../lib/supabase.mjs';
 import { callClaude } from '../../shared/claude.mjs';
-import { getSetting, getVideoType } from '../lib/settings.mjs';
+import { callGemini } from '../../shared/gemini.mjs';
+import { getSetting } from '../lib/settings.mjs';
 import { sendTelegramMessage, sendTelegramMessageWithButtons, waitForTelegramResponse } from '../lib/telegram.mjs';
 import { DEFAULT_VIDEO_TYPE, getVideoConfig, DEFAULTS } from '../lib/video-config.mjs';
+import { parseClaudeJSON } from '../lib/parse-claude-json.mjs';
+import {
+  getPipelineState, getConcept, insertScenes, updateScene,
+  insertYoutubeSeo, updatePipelineState, getScenes,
+} from '../lib/pipeline-db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -49,7 +57,6 @@ function buildKnownCharacters(characters, conceptCharacters = []) {
   for (const c of (characters || [])) {
     speakers.add(c.name.toLowerCase());
   }
-  // Include concept characters so planned new characters aren't silently erased
   for (const name of conceptCharacters) {
     speakers.add(name.toLowerCase());
   }
@@ -58,7 +65,6 @@ function buildKnownCharacters(characters, conceptCharacters = []) {
 
 /**
  * Rewrite a scene's text from character dialogue to narrator perspective.
- * Called when a rogue character (not in library or concept) is auto-corrected to narrator.
  */
 async function rewriteAsNarrator(scene, rogueCharacter, tamilStyleGuide) {
   try {
@@ -92,14 +98,12 @@ function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, cl
   const speakerNames = ['narrator', ...(characters || []).map(c => c.name.toLowerCase()), ...(concept.characters || []).map(c => c.toLowerCase())];
   const speakerList = [...new Set(speakerNames)].join(', ');
 
-  // Build character rules dynamically from character library
   const characterRules = (characters || []).map(c => {
     const name = c.name;
     const desc = c.description || '';
     return `- ${name}: ${desc}`;
   }).join('\n');
 
-  // Build visual description guidance from character library
   const visualExamples = (characters || []).map(c => {
     const prompt = c.image_prompt || c.description || '';
     return `  ✅ "${prompt}"`;
@@ -204,20 +208,36 @@ CRITICAL RULE: The speaker must ALWAYS be in the characters array. If uncle_ravi
 
 /**
  * Stage 2: Generate flat scene array via Claude, send to Telegram for approval.
+ *
+ * NEW: reads concept from DB, writes to scenes + youtube_seo tables.
  */
 export async function runStage2(taskId, tracker, state = {}) {
   console.log('📝 Stage 2: Generating script...');
 
-  const { concept } = state;
-  if (!concept) throw new Error('Stage 2: concept not found in pipeline state');
-
   const sb = getSupabase();
 
-  // videoType: read from concept, default from central config
-  const videoType = concept.videoType || DEFAULT_VIDEO_TYPE;
+  // ── Read concept from DB (new) with fallback to old state ──────────
+  let concept = null;
+  const ps = await getPipelineState(taskId);
+  if (ps?.concept_id) {
+    concept = await getConcept(ps.concept_id);
+    // Map DB column names to the format the prompt builder expects
+    concept = {
+      ...concept,
+      artStyle: concept.art_style,
+      videoType: concept.video_type,
+    };
+    console.log(`  ✓ Concept loaded from DB: "${concept.title}"`);
+  }
+
+  if (!concept) throw new Error('Stage 2: concept not found in DB — check pipeline_state and concepts tables');
+
+  // videoType: read from concept
+  const videoType = concept.videoType || concept.video_type || DEFAULT_VIDEO_TYPE;
   const videoConfig = getVideoConfig(videoType);
   let targetClips = videoConfig.sceneCount;
   let clipDurationSeconds = videoConfig.clipDurationSeconds;
+  const artStyle = concept.artStyle || concept.art_style || DEFAULTS.artStyle;
 
   console.log(`  video_type=${videoType}, target_clips=${targetClips}, clip_duration_seconds=${clipDurationSeconds}`);
 
@@ -227,12 +247,11 @@ export async function runStage2(taskId, tracker, state = {}) {
     .select('name, description, image_prompt, voice_id, approved')
     .eq('approved', true);
 
-  // Generate episode number
+  // Generate episode number from video_queue (published videos count)
   const { count: episodeCount } = await sb
-    .from('video_pipeline_runs')
+    .from('video_queue')
     .select('*', { count: 'exact', head: true })
-    .eq('stage_id', 'publish')
-    .eq('status', 'completed');
+    .eq('status', 'uploaded');
 
   const episodeNumber = (episodeCount || 0) + 1;
 
@@ -244,83 +263,128 @@ export async function runStage2(taskId, tracker, state = {}) {
     voiceFeedback = await getSetting('voice_feedback') || '';
   } catch { /* no voice feedback yet */ }
 
-  // Generate and validate with up to 3 attempts
-  // Also retries if Tamil Unicode characters are missing from text fields
+  // ── Check for resume: already-approved scenes in new DB ────────────
+  const existingScenes = await getScenes(taskId);
+  const alreadyApproved = new Set(
+    existingScenes.filter(s => s.script_approved).map(s => s.scene_number)
+  );
+  if (alreadyApproved.size > 0) {
+    console.log(`  ↩️  Resume: ${alreadyApproved.size} scenes already approved in DB`);
+  }
+
+  // ── Generate and validate with up to 3 attempts ────────────────────
   let scenes;
   let youtube_seo;
   let lastError;
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      console.log(`  Generation attempt ${attempt}/3...`);
-      const result = await generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, voiceFeedback, videoType, artStyle: concept.artStyle });
-      const knownCharacters = buildKnownCharacters(characters, concept.characters);
-      validateScenes(result.scenes, targetClips, knownCharacters, videoType);
+  // If we have existing scenes in DB (resume case), use them
+  if (existingScenes.length > 0) {
+    console.log(`  ↩️  Using ${existingScenes.length} existing scenes from DB`);
+    scenes = existingScenes;
+    // Load youtube_seo from pipeline_state if already saved
+    if (ps?.youtube_seo_id) {
+      const { getYoutubeSeo } = await import('../lib/pipeline-db.mjs');
+      youtube_seo = await getYoutubeSeo(ps.youtube_seo_id);
+    }
+    // Self-healing: if scenes exist but youtube_seo is missing (crash between insertScenes and insertYoutubeSeo)
+    if (!youtube_seo) {
+      console.warn(`  ⚠️  Scenes exist but youtube_seo missing — generating fallback SEO`);
+      youtube_seo = {
+        title: `${concept.title} | Tamil Kids Story | Tiny Tamil Tales`,
+        description: 'A heartwarming Tamil story for little ones. Subscribe to Tiny Tamil Tales! | குழந்தைகளுக்கான தமிழ் கதை',
+        tags: ['tamil kids story', 'tamil animated story', 'tiny tamil tales', 'சிறுவர் கதை', 'tamil cartoon'],
+      };
+      const seoId = await insertYoutubeSeo({
+        title: youtube_seo.title,
+        description: youtube_seo.description,
+        tags: youtube_seo.tags,
+      });
+      await updatePipelineState(taskId, { youtube_seo_id: seoId, episode_number: episodeNumber });
+      console.log(`  ✓ Fallback youtube_seo saved (seo_id: ${seoId})`);
+    }
+  } else {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`  Generation attempt ${attempt}/3...`);
+        const result = await generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, voiceFeedback, videoType, artStyle });
+        const knownCharacters = buildKnownCharacters(characters, concept.characters);
+        validateScenes(result.scenes, targetClips, knownCharacters, videoType);
 
-      // Reject if any scene lacks Tamil Unicode (means Claude ignored instruction)
-      const asciiViolation = result.scenes.find(s => !containsTamilUnicode(s.text));
-      if (asciiViolation) {
-        throw new Error(`Scene ${asciiViolation.scene_number} has no Tamil script — must use Tamil Unicode`);
+        // Reject if any scene lacks Tamil Unicode
+        const asciiViolation = result.scenes.find(s => !containsTamilUnicode(s.text));
+        if (asciiViolation) {
+          throw new Error(`Scene ${asciiViolation.scene_number} has no Tamil script — must use Tamil Unicode`);
+        }
+
+        scenes = result.scenes;
+        youtube_seo = result.youtube_seo;
+        break;
+      } catch (err) {
+        lastError = err;
+        console.warn(`  Attempt ${attempt}/3 failed: ${err.message}`);
+        if (attempt < 3) await new Promise(r => setTimeout(r, 5000));
       }
-
-      scenes = result.scenes;
-      youtube_seo = result.youtube_seo;
-      break;
-    } catch (err) {
-      lastError = err;
-      console.warn(`  Attempt ${attempt}/3 failed: ${err.message}`);
-      if (attempt < 3) await new Promise(r => setTimeout(r, 5000));
     }
-  }
 
-  if (!scenes) throw new Error(`Script generation failed after 3 attempts: ${lastError?.message}`);
+    if (!scenes) throw new Error(`Script generation failed after 3 attempts: ${lastError?.message}`);
 
-  // Validate no placeholder text slipped through
-  const FORBIDDEN_PLACEHOLDERS = ['same locked description', 'same description', '[locked description]', 'INSERT CHARACTER'];
-  for (const scene of scenes) {
-    for (const placeholder of FORBIDDEN_PLACEHOLDERS) {
-      if (scene.visual_description?.toLowerCase().includes(placeholder.toLowerCase())) {
-        throw new Error(`Scene ${scene.scene_number} visual_description contains placeholder text: "${placeholder}". Fix the script generation prompt.`);
+    // Validate no placeholder text slipped through
+    const FORBIDDEN_PLACEHOLDERS = ['same locked description', 'same description', '[locked description]', 'INSERT CHARACTER'];
+    for (const scene of scenes) {
+      for (const placeholder of FORBIDDEN_PLACEHOLDERS) {
+        if (scene.visual_description?.toLowerCase().includes(placeholder.toLowerCase())) {
+          throw new Error(`Scene ${scene.scene_number} visual_description contains placeholder text: "${placeholder}". Fix the script generation prompt.`);
+        }
       }
     }
-  }
 
-  // Rewrite rogue character scenes to narrator perspective
-  const rogueScenes = scenes.filter(s => s._rogueCharacter);
-  if (rogueScenes.length > 0) {
-    console.warn(`  ⚠️  ${rogueScenes.length} scene(s) had rogue characters — rewriting to narrator perspective`);
-    for (const scene of rogueScenes) {
-      console.log(`  ↩️  Scene ${scene.scene_number}: "${scene._rogueCharacter}" → narrator`);
-      scene.text = await rewriteAsNarrator(scene, scene._rogueCharacter, tamilStyleGuide);
-      delete scene._rogueCharacter;
+    // Rewrite rogue character scenes to narrator perspective
+    const rogueScenes = scenes.filter(s => s._rogueCharacter);
+    if (rogueScenes.length > 0) {
+      console.warn(`  ⚠️  ${rogueScenes.length} scene(s) had rogue characters — rewriting to narrator perspective`);
+      for (const scene of rogueScenes) {
+        console.log(`  ↩️  Scene ${scene.scene_number}: "${scene._rogueCharacter}" → narrator`);
+        scene.text = await rewriteAsNarrator(scene, scene._rogueCharacter, tamilStyleGuide);
+        delete scene._rogueCharacter;
+      }
     }
+
+    // Auto-fill youtube_seo if Claude omitted it
+    if (!youtube_seo) {
+      youtube_seo = {
+        title: `${concept.title} | Tamil Kids Story | Tiny Tamil Tales`,
+        description: 'A heartwarming Tamil story for little ones. Subscribe to Tiny Tamil Tales! | குழந்தைகளுக்கான தமிழ் கதை',
+        tags: ['tamil kids story', 'tamil animated story', 'tiny tamil tales', 'சிறுவர் கதை', 'tamil cartoon'],
+      };
+    }
+
+    // ── NEW: Write scenes + youtube_seo to DB ──────────────────────────
+    await insertScenes(taskId, scenes);
+    console.log(`  ✓ ${scenes.length} scenes saved to DB`);
+
+    const seoId = await insertYoutubeSeo({
+      title: youtube_seo.title,
+      description: youtube_seo.description,
+      tags: youtube_seo.tags,
+    });
+    await updatePipelineState(taskId, { youtube_seo_id: seoId, episode_number: episodeNumber });
+    console.log(`  ✓ youtube_seo saved to DB (seo_id: ${seoId})`);
   }
 
-  // Auto-fill youtube_seo if Claude omitted it
-  if (!youtube_seo) {
-    youtube_seo = {
-      title: `${concept.title} | Tamil Kids Story | Tiny Tamil Tales`,
-      description: 'A heartwarming Tamil story for little ones. Subscribe to Tiny Tamil Tales! | குழந்தைகளுக்கான தமிழ் கதை',
-      tags: ['tamil kids story', 'tamil animated story', 'tiny tamil tales', 'சிறுவர் கதை', 'tamil cartoon'],
-    };
-  }
-
-  // Per-scene approval loop via Telegram
-  const approvedScenes = state.approvedScenes || {};
+  // ── Per-scene approval loop via Telegram ─────────────────────────
   await sendTelegramMessage(`📝 Script ready: "${concept.title}" (Ep. ${episodeNumber}) — ${scenes.length} scenes for review`);
 
   for (const scene of scenes) {
     const sceneNum = scene.scene_number;
 
-    // Skip already-approved scenes (resume support)
-    if (approvedScenes[sceneNum]?.approved) {
+    // Skip already-approved scenes (resume support — check DB)
+    if (alreadyApproved.has(sceneNum)) {
       console.log(`  Scene ${sceneNum}: already approved — skipping`);
       continue;
     }
 
     let approved = false;
     while (!approved) {
-      // Send scene to Telegram with approve/reject buttons (prefixed callback)
       const callbackPrefix = `s2_${sceneNum}`;
       const telegramMsg = [
         `📝 Scene ${sceneNum}/${scenes.length}`,
@@ -331,25 +395,23 @@ export async function runStage2(taskId, tracker, state = {}) {
         `Visual: ${scene.visual_description}`,
       ].join('\n');
       const telegramMessageId = await sendTelegramMessageWithButtons(telegramMsg, callbackPrefix);
-
-      // Wait for response from Telegram
       const decision = await waitForTelegramResponse(telegramMessageId, callbackPrefix);
 
       if (decision.approved) {
-        approvedScenes[sceneNum] = { approved: true };
+        // NEW: mark approved in DB
+        await updateScene(taskId, sceneNum, { script_approved: true });
         approved = true;
         console.log(`  ✓ Scene ${sceneNum} approved`);
       } else {
         console.log(`  ✗ Scene ${sceneNum} rejected: ${decision.comment}`);
 
-        // Check if comment contains a direct text replacement
         const textMatch = decision.comment?.match(/^text:\s*(.+)/is);
         if (textMatch) {
-          // Direct replacement — no Claude call needed
           scene.text = textMatch[1].trim();
+          // NEW: update text in DB
+          await updateScene(taskId, sceneNum, { text: scene.text });
           console.log(`  ↩️  Scene ${sceneNum} text replaced directly`);
         } else {
-          // Feedback — Claude regenerates this single scene
           console.log(`  ↩️  Regenerating scene ${sceneNum} with feedback...`);
           const regenerated = await regenerateSingleScene({
             scene,
@@ -366,73 +428,37 @@ export async function runStage2(taskId, tracker, state = {}) {
           scene.visual_description = regenerated.visual_description;
           if (regenerated.speaker) scene.speaker = regenerated.speaker;
           if (regenerated.emotion) scene.emotion = regenerated.emotion;
+          // NEW: update regenerated scene in DB
+          await updateScene(taskId, sceneNum, {
+            text: scene.text,
+            visual_description: scene.visual_description,
+            speaker: scene.speaker,
+            emotion: scene.emotion,
+          });
         }
       }
-
-      // Save intermediate state for resume safety
-      await sb.from('video_pipeline_runs').upsert({
-        task_id: taskId,
-        stage: 2,
-        status: 'in_progress',
-        pipeline_state: { scenes, episodeNumber, youtube_seo, approvedScenes },
-      }, { onConflict: 'task_id,stage' });
     }
   }
-
-  // All scenes approved — save final state
-  await sb.from('video_pipeline_runs').upsert({
-    task_id: taskId,
-    stage: 2,
-    status: 'completed',
-    pipeline_state: { scenes, episodeNumber, youtube_seo },
-  }, { onConflict: 'task_id,stage' });
 
   await sendTelegramMessage(`✅ All ${scenes.length} scenes approved for "${concept.title}"`);
   console.log(`✅ Stage 2 complete — ${scenes.length} scenes approved.`);
 
-  // Build script object expected by stage-03 (metadata.characters) and stage-08 (youtube_seo)
-  const script = {
-    metadata: {
-      title: youtube_seo.title,
-      episode: episodeNumber,
-      // Always include the speaker + concept characters as fallback — LLM often omits secondary
-      // characters from scene.characters arrays even when they're visually present or speaking.
-      characters: [...new Set([
-        ...scenes.flatMap(s => [...(s.characters || []), s.speaker].filter(Boolean)),
-        ...(concept?.characters || []),
-      ].map(c => c.toLowerCase()).filter(c => c && c !== 'narrator'))],
-    },
-    youtube_seo,
-  };
-
-  const artStyle = concept.artStyle || '3D Pixar animation still';
-  return { ...state, scenes, episodeNumber, youtube_seo, script, videoType, artStyle };
 }
 
 async function generateScript({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, voiceFeedback, videoType = 'long', artStyle }) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn('No ANTHROPIC_API_KEY — using sample scenes');
-    return getSampleResult(concept, episodeNumber, targetClips);
-  }
-
   const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, voiceFeedback, videoType, artStyle: artStyle || concept.artStyle });
 
   const message = await callClaude({
     model: 'claude-sonnet-4-6',
     maxTokens: 8192,
     system: systemPrompt,
-    messages: [{
-      role: 'user',
-      content: `Generate the complete scene list for "${concept.title}". Return only valid JSON — no markdown fences, no extra text.`,
-    }],
+    messages: [{ role: 'user', content: `Generate the complete scene list for "${concept.title}". Return only valid JSON — no markdown fences, no extra text.` }],
   });
 
-  let text = message.content[0]?.text?.trim() || '';
-  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const parsed = JSON.parse(text);
+  const parsed = parseClaudeJSON(message.content[0]?.text, 'Stage 2 generateScript');
 
   return {
-    scenes: parsed.scenes || parsed, // handle both { scenes: [...] } and bare array
+    scenes: parsed.scenes || parsed,
     youtube_seo: parsed.youtube_seo || null,
   };
 }
@@ -462,19 +488,19 @@ function validateScenes(scenes, targetClips, knownCharacters, videoType = 'short
     scene.emotion = VALID_EMOTIONS.has(emotion) ? emotion : 'normal';
 
     // Auto-fix characters array — fallback to [speaker] if missing
-    // Filter to only known characters (library + concept) to exclude crowd/background characters
     if (!Array.isArray(scene.characters) || scene.characters.length === 0) {
       scene.characters = scene.speaker !== 'narrator' ? [scene.speaker] : [];
-    } else if (scene.speaker && scene.speaker !== 'narrator' && !scene.characters.includes(scene.speaker)) {
-      // Speaker missing from their own scene's characters array — add them
-      scene.characters.push(scene.speaker);
     } else {
       scene.characters = scene.characters
         .map(c => c.toLowerCase())
         .filter(c => knownCharacters.has(c) && c !== 'narrator');
+      // Ensure speaker is in their own scene's characters array
+      if (scene.speaker && scene.speaker !== 'narrator' && !scene.characters.includes(scene.speaker)) {
+        scene.characters.push(scene.speaker);
+      }
     }
 
-    // Check word count (split on whitespace) — thresholds from video config
+    // Check word count
     const wordCount = scene.text.trim().split(/\s+/).length;
     const valConfig = getVideoConfig(videoType);
     const minWords = valConfig.minWordsPerScene;
@@ -525,9 +551,7 @@ No markdown. No explanation.`;
     }],
   });
 
-  let text = message.content[0]?.text?.trim() || '';
-  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  return JSON.parse(text);
+  return parseClaudeJSON(message.content[0]?.text, `Stage 2 regenerateScene ${scene.scene_number}`);
 }
 
 function getSampleResult(concept, episodeNumber, targetClips) {
@@ -539,6 +563,7 @@ function getSampleResult(concept, episodeNumber, targetClips) {
       emotion: 'gentle',
       text: 'ஒரு அழகான காட்டுல, Kavin, peacock, தன்னோட friends-ஓட happy-ஆ time spend பண்ணிட்டு இருந்தான்.',
       visual_description: `Tamil forest scene ${i}: a colorful peacock with spread fan tail feathers in a sunny forest clearing`,
+      characters: [],
     });
   }
   return {

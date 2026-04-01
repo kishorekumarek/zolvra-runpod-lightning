@@ -1,11 +1,11 @@
 // stages/stage-07-assemble.mjs — Simple 1:1 scene assembly (clip + audio → final)
-// Auto-stage — checks isFeedbackCollectionMode()
+// REWRITTEN for pipeline schema rewrite: reads all assets from DB + storage, writes to video_output.
 import 'dotenv/config';
 import { execSync } from 'child_process';
 import { promises as fs } from 'fs';
-import { join } from 'path';
-import { getSupabase } from '../lib/supabase.mjs';
-import { isFeedbackCollectionMode, getVideoType } from '../lib/settings.mjs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { sendTelegramMessage } from '../lib/telegram.mjs';
 import { getVideoConfig } from '../lib/video-config.mjs';
 import {
@@ -20,28 +20,29 @@ import { getSfxPath } from '../lib/sfx-mixer.mjs';
 import { getBgmPath } from '../lib/bgm-selector.mjs';
 import { callClaude } from '../../shared/claude.mjs';
 import { downloadFromStorage, BUCKETS } from '../lib/storage.mjs';
+import {
+  getPipelineState, getConcept, getScenes, updateScene,
+  insertVideoOutput, updatePipelineState,
+} from '../lib/pipeline-db.mjs';
 
 const STAGE = 7;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const OUTPUT_DIR = join(__dirname, '..', 'output');
 
 /**
  * Merge a video clip with audio using full clip duration.
- * Voice + SFX loop mixed via filter_complex. BGM is applied once on the final
- * concatenated video by applyFinalBgm (not per-scene, to avoid double BGM).
- *
- * Handles duration mismatches:
- * - Audio > Video (>0.5s): ping-pong loops the clip to fill audio duration
- * - Video > Audio (>0.5s): pads voice with silence, SFX continues as ambient bed
  */
 async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, videoType = 'long' }) {
   const clipDuration = getDurationSeconds(clipPath);
   const audioDuration = getDurationSeconds(audioPath);
-  const sceneDur = audioDuration > 0 ? audioDuration : clipDuration;
+  // Use clip duration when clip is longer — never trim the animation.
+  // Audio will be padded with silence to fill the remaining clip time.
+  // Only use audio duration when audio is longer (clip will loop to fill).
+  const sceneDur = (audioDuration > 0 && audioDuration > clipDuration) ? audioDuration : clipDuration;
 
-  // Scale/crop filter depends on video format
   const vScale = getVideoConfig(videoType).videoScale;
   const scaleFilter = `scale=${vScale}:force_original_aspect_ratio=increase,crop=${vScale}`;
 
-  // Case 3: Audio > Video — ping-pong loop the clip
   let effectiveClipPath = clipPath;
   let loopedPath = null;
   if (audioDuration > clipDuration + 0.5) {
@@ -54,7 +55,6 @@ async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, vi
     if (sfxPath) {
       let fc;
       if (clipDuration > audioDuration + 0.5 && audioDuration > 0) {
-        // Case 2: Video > Audio — pad voice with silence, SFX as ambient bed
         fc = [
           `[0:v]${scaleFilter}[vout]`,
           `[1:a]volume=1.0,apad=whole_dur=${sceneDur}[voice_padded]`,
@@ -62,7 +62,6 @@ async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, vi
           `[voice_padded][sfx]amix=inputs=2:duration=longest:normalize=0[aout]`,
         ].join(';');
       } else {
-        // Normal or small difference: standard mix
         fc = [
           `[0:v]${scaleFilter}[vout]`,
           `[1:a]volume=1.0[voice]`,
@@ -86,7 +85,6 @@ async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, vi
       ].join(' ');
       execSync(cmd, { stdio: 'pipe' });
     } else {
-      // Fallback: voice only, pad with silence if video > audio
       let audioFilter;
       if (clipDuration > audioDuration + 0.5 && audioDuration > 0) {
         audioFilter = `-filter_complex "[1:a]apad=whole_dur=${sceneDur}[aout]" -map 0:v -map "[aout]" -vf "${scaleFilter}"`;
@@ -107,7 +105,6 @@ async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, vi
       execSync(cmd, { stdio: 'pipe' });
     }
   } finally {
-    // Clean up ping-pong temp file
     if (loopedPath) {
       await fs.unlink(loopedPath).catch(() => {});
     }
@@ -118,7 +115,6 @@ async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, vi
 
 /**
  * Assign environment tags to scenes using Claude Haiku.
- * Maps visual_description + emotion → one of 7 environment categories for SFX selection.
  */
 async function assignSceneEnvironments(scenes) {
   const VALID_ENVS = ['forest_day', 'forest_rain', 'river', 'village', 'night', 'sky', 'crowd_children'];
@@ -144,7 +140,6 @@ Choose the best match based on the visual description and emotion.`,
     });
 
     const text = response.content[0]?.text || '';
-    // Extract JSON array from response (may be wrapped in markdown code block)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (!jsonMatch) throw new Error('No JSON array in response');
 
@@ -158,9 +153,6 @@ Choose the best match based on the visual description and emotion.`,
       }
     }
     console.log(`  🌍 Environments assigned: ${assigned}/${scenes.length} scenes`);
-    for (const s of scenes) {
-      console.log(`    Scene ${s.scene_number}: ${s.environment || 'forest_day'}`);
-    }
   } catch (err) {
     console.warn(`  ⚠️  Environment assignment failed (${err.message}) — using forest_day defaults`);
   }
@@ -168,14 +160,13 @@ Choose the best match based on the visual description and emotion.`,
 
 /**
  * Apply continuous BGM over the final concatenated video.
- * Loops BGM to fill full duration, vol 0.1, fade in 2s, fade out 3s.
  */
 function applyFinalBgm({ inputPath, bgmPath, outputPath }) {
   const totalDuration = getDurationSeconds(inputPath);
   const fadeOutStart = Math.max(0, totalDuration - 3);
 
   const fc = [
-    `[1:a]volume=0.1,afade=t=in:st=0:d=2,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=3[bgm_faded]`,
+    `[1:a]volume=0.2,afade=t=in:st=0:d=2,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=3[bgm_faded]`,
     `[0:a][bgm_faded]amix=inputs=2:duration=first:normalize=0[aout]`,
   ].join(';');
 
@@ -194,20 +185,25 @@ function applyFinalBgm({ inputPath, bgmPath, outputPath }) {
 
 /**
  * Stage 7: Simple paired assembly.
- * For each scene N: clip + audio (+ SFX + BGM segment) → scene_N_final.mp4 (full clip duration).
- * Then concat all scene finals → concat.mp4 → apply continuous BGM → final.mp4.
+ *
+ * NEW: reads all scene assets from DB + storage. Writes final video to persistent
+ * output dir + video_output table.
  */
 export async function runStage7(taskId, tracker, state = {}) {
   console.log('🎞️  Stage 7: Video assembly...');
 
-  const { scenes, sceneImagePaths, sceneAnimPaths, sceneAudioPaths, tmpDir } = state;
-  if (!scenes) throw new Error('Stage 7: scenes not found');
-  if (!tmpDir) throw new Error('Stage 7: tmpDir not found');
+  // ── Read from DB ───────────────────────────────────────────────────
+  const ps = await getPipelineState(taskId);
+  if (!ps?.concept_id) throw new Error('Stage 7: pipeline_state not found or missing concept_id');
 
-  const videoType = state.videoType ?? await getVideoType(); // 'long' | 'short'
+  const concept = await getConcept(ps.concept_id);
+  const videoType = concept.video_type || 'short';
   console.log(`  video_type=${videoType}`);
 
-  const sb = getSupabase();
+  const scenes = await getScenes(taskId);
+  if (!scenes || scenes.length === 0) throw new Error('Stage 7: no scenes found in DB');
+
+  const tmpDir = `/tmp/zolvra-pipeline/${taskId}`;
   const assemblyDir = join(tmpDir, 'assembly');
   await fs.mkdir(assemblyDir, { recursive: true });
 
@@ -221,39 +217,65 @@ export async function runStage7(taskId, tracker, state = {}) {
   // Assign environment tags for SFX selection via Claude
   await assignSceneEnvironments(scenes);
 
-  const sceneFinalPaths = []; // ordered list of assembled scene paths
+  // Write environment tags back to DB
+  for (const s of scenes) {
+    if (s.environment) {
+      await updateScene(taskId, s.scene_number, { environment: s.environment });
+    }
+  }
+
+  // ── Download all assets from storage ───────────────────────────────
+  const scenesDir = join(tmpDir, 'scenes');
+  await fs.mkdir(scenesDir, { recursive: true });
+
+  const sceneFinalPaths = [];
 
   for (const scene of scenes) {
     const sceneNum = scene.scene_number;
     const sceneLabel = String(sceneNum).padStart(2, '0');
 
-    const audioPath = sceneAudioPaths?.[sceneNum];
+    // Download audio from storage (NEW — was local /tmp path before)
+    let audioPath = null;
+    if (scene.audio_url) {
+      try {
+        const audioBuf = await downloadFromStorage({ bucket: BUCKETS.scenes, path: scene.audio_url });
+        audioPath = join(scenesDir, `scene_${sceneLabel}_audio.mp3`);
+        await fs.writeFile(audioPath, audioBuf);
+      } catch (dlErr) {
+        console.warn(`  ⚠️  Scene ${sceneNum}: audio download failed: ${dlErr.message}`);
+      }
+    }
+
     if (!audioPath) {
       console.warn(`  ⚠️  No audio for scene ${sceneNum} — skipping`);
       continue;
     }
 
-    let animPath = sceneAnimPaths?.[sceneNum]?.animPath ?? null;
-    const animStoragePath = sceneAnimPaths?.[sceneNum]?.storagePath ?? null;
-    const imagePath = sceneImagePaths?.[sceneNum]?.imagePath ?? null;
+    // Download animation or image from storage
+    let animPath = null;
+    let imagePath = null;
 
-    // Bug 1 fix: if animPath is null but storagePath exists, download from Supabase
-    if (!animPath && animStoragePath) {
+    if (scene.animation_url) {
       try {
-        console.log(`  ⬇️  Scene ${sceneNum}: animPath missing — downloading from Supabase (${animStoragePath})...`);
-        const scenesDir = join(tmpDir, 'scenes');
-        await fs.mkdir(scenesDir, { recursive: true });
-        const localAnimPath = join(scenesDir, `scene_${sceneLabel}_anim.mp4`);
-        const buffer = await downloadFromStorage({ bucket: BUCKETS.scenes, path: animStoragePath });
-        await fs.writeFile(localAnimPath, buffer);
-        animPath = localAnimPath;
-        console.log(`  ✓ Scene ${sceneNum}: animation downloaded (${(buffer.length / 1024 / 1024).toFixed(1)}MB)`);
-      } catch (downloadErr) {
-        console.warn(`  ⚠️  Scene ${sceneNum}: failed to download animation from Supabase — ${downloadErr.message}`);
+        const animBuf = await downloadFromStorage({ bucket: BUCKETS.scenes, path: scene.animation_url });
+        animPath = join(scenesDir, `scene_${sceneLabel}_anim.mp4`);
+        await fs.writeFile(animPath, animBuf);
+      } catch (dlErr) {
+        console.warn(`  ⚠️  Scene ${sceneNum}: animation download failed: ${dlErr.message}`);
       }
     }
 
-    // Resolve SFX for this scene's environment
+    if (!animPath && scene.image_url) {
+      try {
+        const imgBuf = await downloadFromStorage({ bucket: BUCKETS.scenes, path: scene.image_url });
+        imagePath = join(scenesDir, `scene_${sceneLabel}_image.png`);
+        await fs.writeFile(imagePath, imgBuf);
+      } catch (dlErr) {
+        console.warn(`  ⚠️  Scene ${sceneNum}: image download failed: ${dlErr.message}`);
+      }
+    }
+
+    // Resolve SFX
     const environment = scene.environment || 'forest_day';
     const sfxPath = getSfxPath(environment);
 
@@ -270,7 +292,6 @@ export async function runStage7(taskId, tracker, state = {}) {
         videoType,
       });
     } else if (imagePath) {
-      // No animation — use still image + audio (zoompan)
       const audioDuration = getDurationSeconds(audioPath);
       console.log(`  🖼️  Scene ${sceneNum}: still image + audio (${audioDuration.toFixed(1)}s)...`);
       await stillImageToVideo({ imagePath, audioPath, outputPath: finalPath, videoType });
@@ -287,12 +308,12 @@ export async function runStage7(taskId, tracker, state = {}) {
     throw new Error('No scenes were assembled — cannot create final video');
   }
 
-  // Concatenate all scene finals — plain concat (no transitions)
+  // Concatenate all scene finals
   console.log(`  📼 Concat ${sceneFinalPaths.length} scenes (plain)...`);
   const concatPath = join(assemblyDir, 'concat.mp4');
   await assembleVideo({ sceneCombinedPaths: sceneFinalPaths, outputPath: concatPath });
 
-  // Apply continuous BGM overlay (vol 0.1, fade in 2s, fade out 3s)
+  // Apply continuous BGM overlay
   const finalPath = join(assemblyDir, 'final.mp4');
   if (bgmPath) {
     console.log('  🎵 Applying continuous BGM overlay...');
@@ -305,13 +326,12 @@ export async function runStage7(taskId, tracker, state = {}) {
   const preFinalDuration = getDurationSeconds(finalPath);
   console.log(`  ✓ Pre-final video: ${preFinalDuration.toFixed(1)}s`);
 
-  // Logo overlay (top-right, ~12% of video width, 20px padding)
-  const logoPath = join(import.meta.dirname, '..', 'assets', 'channel-logo.png');
+  // Logo overlay
+  const logoPath = join(__dirname, '..', 'assets', 'channel-logo.png');
   let logoApplied = false;
   try {
     await fs.access(logoPath);
     const withLogoPath = join(assemblyDir, 'with-logo.mp4');
-    // Get video width for logo scaling
     const dims = execSync(
       `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "${finalPath}"`
     ).toString().trim();
@@ -334,22 +354,20 @@ export async function runStage7(taskId, tracker, state = {}) {
     console.warn('  ⚠️  Logo file not found — skipping overlay');
   }
 
-  // End card — pick the right one based on video format
+  // End card
   const endCardFilename = videoType === 'short' ? 'shorts_end_card.mp4' : 'end-card.mp4';
-  const endCardVideoPath = join(import.meta.dirname, '..', 'assets', endCardFilename);
-  const endCardAudioPath = join(import.meta.dirname, '..', 'assets', 'end_card_audio.mp3');
+  const endCardVideoPath = join(__dirname, '..', 'assets', endCardFilename);
+  const endCardAudioPath = join(__dirname, '..', 'assets', 'end_card_audio.mp3');
   let endCardAppended = false;
   try {
     await fs.access(endCardVideoPath);
     await fs.access(endCardAudioPath);
 
-    // Get main video dimensions for end card scaling
     const mainDims = execSync(
       `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${finalPath}"`
     ).toString().trim().split(',');
     const [mW, mH] = mainDims.map(Number);
 
-    // Re-encode end card to match main video
     const endCardReencoded = join(assemblyDir, 'end-card-reencoded.mp4');
     execSync([
       `"${FFMPEG}" -y`,
@@ -362,7 +380,6 @@ export async function runStage7(taskId, tracker, state = {}) {
       `"${endCardReencoded}"`,
     ].join(' '), { stdio: 'pipe' });
 
-    // Re-encode main to ensure matching params for concat
     const mainReencoded = join(assemblyDir, 'main-reencoded.mp4');
     execSync([
       `"${FFMPEG}" -y`,
@@ -372,13 +389,11 @@ export async function runStage7(taskId, tracker, state = {}) {
       `"${mainReencoded}"`,
     ].join(' '), { stdio: 'pipe' });
 
-    // Concat main + end card
     const concatEndPath = join(assemblyDir, 'concat-end.txt');
     await fs.writeFile(concatEndPath, `file '${mainReencoded}'\nfile '${endCardReencoded}'\n`);
     const withEndCardPath = join(assemblyDir, 'with-endcard.mp4');
     execSync(`"${FFMPEG}" -y -f concat -safe 0 -i "${concatEndPath}" -c copy "${withEndCardPath}"`, { stdio: 'pipe' });
 
-    // Fix sync drift with -shortest
     const syncedPath = join(assemblyDir, 'synced-final.mp4');
     execSync([
       `"${FFMPEG}" -y`,
@@ -398,11 +413,25 @@ export async function runStage7(taskId, tracker, state = {}) {
   const duration = getDurationSeconds(finalPath);
   console.log(`  ✓ Final video: ${duration.toFixed(1)}s (logo: ${logoApplied ? '✅' : '❌'}, end card: ${endCardAppended ? '✅' : '❌'})`);
 
-  // Feedback collection mode — notify Telegram
+  // ── Save to persistent output dir + write to video_output table ────
+  const outputDir = join(OUTPUT_DIR, taskId);
+  await fs.mkdir(outputDir, { recursive: true });
+  const persistentVideoPath = join(outputDir, 'final.mp4');
+  await fs.copyFile(finalPath, persistentVideoPath);
+  console.log(`  💾 Final video saved: ${persistentVideoPath}`);
+
+  const videoOutputId = await insertVideoOutput({
+    local_video_path: persistentVideoPath,
+    video_url: null,
+    final_duration_seconds: duration,
+  });
+  await updatePipelineState(taskId, { video_output_id: videoOutputId });
+  console.log(`  ✓ video_output saved (id: ${videoOutputId})`);
+
   if (await isFeedbackCollectionMode()) {
-    await sendTelegramMessage(`🎞️ Assembly complete: ${duration.toFixed(1)}s — ${finalPath}`);
+    await sendTelegramMessage(`🎞️ Assembly complete: ${duration.toFixed(1)}s — ${persistentVideoPath}`);
   }
 
-  console.log(`✅ Stage 7 complete. Final video: ${finalPath}`);
-  return { ...state, finalVideoPath: finalPath, finalDurationSeconds: duration };
+  console.log(`✅ Stage 7 complete. Final video: ${persistentVideoPath}`);
+
 }

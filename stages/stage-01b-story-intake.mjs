@@ -2,12 +2,18 @@
 // extracts metadata (title, theme, characters, synopsis) via Claude,
 // sends to Telegram for Darl's approval, and builds a concept object
 // with the full outline for Stage 2.
+//
+// REWRITTEN for pipeline schema rewrite: writes to concepts + pipeline_state tables.
+// Dual-write: also returns concept object for launcher backward compatibility.
 import 'dotenv/config';
 import { callClaude } from '../../shared/claude.mjs';
 import {
   sendTelegramMessage, sendTelegramMessageWithButtons, waitForTelegramResponse,
-  sendTelegramMessageWithCustomButtons, waitForTelegramMultiResponse,
 } from '../lib/telegram.mjs';
+import { approveCharacterList } from '../lib/character-approval.mjs';
+import { parseClaudeJSON } from '../lib/parse-claude-json.mjs';
+import { insertConcept, insertPipelineState, getPipelineState } from '../lib/pipeline-db.mjs';
+import { DEFAULTS } from '../lib/video-config.mjs';
 
 /**
  * Stage 1B: Extract concept metadata from a user-provided story outline.
@@ -17,9 +23,10 @@ import {
  * @param {string} storyText - The full story/outline text from the user
  * @param {object} [opts]
  * @param {string} [opts.videoType] - 'short' or 'long' — passed through to concept
- * @returns {{ title, theme, synopsis, characters, outline, videoType? }}
+ * @param {string} [opts.taskId] - If provided, writes to concepts + pipeline_state tables
+ * @returns {{ title, theme, synopsis, characters, outline, videoType?, artStyle, conceptId? }}
  */
-export async function extractConceptFromStory(storyText, { videoType } = {}) {
+export async function extractConceptFromStory(storyText, { videoType, taskId } = {}) {
   console.log('📖 Stage 1B: Extracting concept from user story...');
 
   const systemPrompt = `You are a metadata extractor for a Tamil children's YouTube channel called @tinytamiltales.
@@ -50,9 +57,7 @@ Return ONLY a JSON object. No markdown. No explanation.
     }],
   });
 
-  let text = message.content[0]?.text?.trim() || '';
-  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const parsed = JSON.parse(text);
+  const parsed = parseClaudeJSON(message.content[0]?.text, 'Stage 1B initial extraction');
 
   if (!parsed.title || !parsed.characters) {
     throw new Error('Stage 1B: Claude failed to extract title or characters from story');
@@ -64,7 +69,7 @@ Return ONLY a JSON object. No markdown. No explanation.
     synopsis: parsed.synopsis || '',
     characters: parsed.characters.map(c => c.toLowerCase()),
     outline: storyText,
-    artStyle: parsed.artStyle || '3D Pixar animation still',
+    artStyle: DEFAULTS.artStyle,
     ...(videoType ? { videoType } : {}),
   };
 
@@ -102,6 +107,30 @@ Return ONLY a JSON object. No markdown. No explanation.
     if (decision.approved) {
       console.log(`  ✓ Concept approved — reviewing character list...`);
       concept.characters = await approveCharacterList(concept.characters, 's1b_chars');
+
+      // Write to concepts + pipeline_state tables if taskId provided
+      if (taskId) {
+        // Idempotency guard: check if pipeline_state already exists (crash recovery)
+        const existing = await getPipelineState(taskId);
+        if (existing?.concept_id) {
+          concept.conceptId = existing.concept_id;
+          console.log(`  ↩️  pipeline_state already exists (concept_id: ${existing.concept_id}) — skipping insert`);
+        } else {
+          const conceptId = await insertConcept({
+            title: concept.title,
+            theme: concept.theme,
+            synopsis: concept.synopsis,
+            characters: concept.characters,
+            outline: concept.outline,
+            art_style: concept.artStyle || DEFAULTS.artStyle,
+            video_type: concept.videoType || 'short',
+          });
+          await insertPipelineState(taskId, conceptId);
+          concept.conceptId = conceptId;
+          console.log(`  ✓ Concept saved to new tables (concept_id: ${conceptId})`);
+        }
+      }
+
       console.log(`✅ Stage 1B complete`);
       return concept;
     }
@@ -123,98 +152,15 @@ Return ONLY a JSON object. No markdown. No explanation.
       ],
     });
 
-    let retryText = retryMessage.content[0]?.text?.trim() || '';
-    retryText = retryText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    const retryParsed = JSON.parse(retryText);
+    const retryParsed = parseClaudeJSON(retryMessage.content[0]?.text, 'Stage 1B re-extraction');
     lastParsed = retryParsed;
 
     concept.title = retryParsed.title || concept.title;
     concept.theme = retryParsed.theme || concept.theme;
     concept.synopsis = retryParsed.synopsis || concept.synopsis;
     concept.characters = (retryParsed.characters || concept.characters).map(c => c.toLowerCase());
-    concept.artStyle = retryParsed.artStyle || concept.artStyle;
+    concept.artStyle = DEFAULTS.artStyle;
 
     console.log(`  ↩️  Concept re-extracted — Title: ${concept.title}`);
-  }
-}
-
-/**
- * Interactive character list approval via Telegram.
- * Loops until the user approves — allows adding/removing characters.
- *
- * @param {string[]} characters - current character list
- * @param {string} prefix - callback prefix for Telegram buttons
- * @returns {Promise<string[]>} - approved character list
- */
-async function approveCharacterList(characters, prefix) {
-  let charList = [...characters];
-  let round = 0;
-
-  while (true) {
-    const charDisplay = charList.length > 0
-      ? charList.map((c, i) => `  ${i + 1}. ${c}`).join('\n')
-      : '  (empty)';
-
-    const msg = [
-      `👤 Character List Review`,
-      ``,
-      charDisplay,
-      ``,
-      `Approve the list, or add/remove characters:`,
-    ].join('\n');
-
-    const callbackPrefix = `${prefix}_${round}`;
-    const msgId = await sendTelegramMessageWithCustomButtons(msg, callbackPrefix, [
-      { text: '✅ Approve', action: 'approve' },
-      { text: '➕ Add', action: 'add' },
-      { text: '➖ Remove', action: 'remove' },
-    ]);
-
-    const decision = await waitForTelegramMultiResponse(msgId, callbackPrefix, {
-      needsFeedback: ['add', 'remove'],
-    });
-
-    if (decision.action === 'approve') {
-      console.log(`  ✓ Character list approved: ${charList.join(', ')}`);
-      return charList;
-    }
-
-    if (decision.action === 'add') {
-      const name = decision.comment?.trim().toLowerCase();
-      if (name && !charList.includes(name)) {
-        charList.push(name);
-        console.log(`  ➕ Added character: ${name}`);
-        await sendTelegramMessage(`➕ Added "${name}" to character list`);
-      } else if (name && charList.includes(name)) {
-        await sendTelegramMessage(`⚠️ "${name}" already in the list`);
-      }
-    }
-
-    if (decision.action === 'remove') {
-      const input = decision.comment?.trim().toLowerCase();
-      if (!input) {
-        await sendTelegramMessage(`⚠️ No character specified to remove`);
-      } else {
-        // Try matching by name or by number
-        const byNumber = parseInt(input, 10);
-        let removed = null;
-        if (!isNaN(byNumber) && byNumber >= 1 && byNumber <= charList.length) {
-          removed = charList.splice(byNumber - 1, 1)[0];
-        } else {
-          const idx = charList.indexOf(input);
-          if (idx !== -1) {
-            removed = charList.splice(idx, 1)[0];
-          }
-        }
-        if (removed) {
-          console.log(`  ➖ Removed character: ${removed}`);
-          await sendTelegramMessage(`➖ Removed "${removed}" from character list`);
-        } else {
-          await sendTelegramMessage(`⚠️ Character "${input}" not found in the list`);
-        }
-      }
-    }
-
-    round++;
   }
 }
