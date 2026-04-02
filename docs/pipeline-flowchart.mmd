@@ -1,0 +1,343 @@
+flowchart TD
+    %% ═══════════════════════════════════════════════════════════
+    %% LAUNCHER
+    %% ═══════════════════════════════════════════════════════════
+    START([Launch Pipeline]) --> PARSE_ARGS{CLI Mode?}
+    PARSE_ARGS -->|--resume| RESUME_MODE
+    PARSE_ARGS -->|story file| NEW_MODE
+
+    subgraph LAUNCHER[Launcher - launch-pipeline-from-story.mjs]
+        RESUME_MODE[Resume Mode] --> RESUME_TASKID{task_id provided?}
+        RESUME_TASKID -->|yes| LOAD_PS[Load pipeline_state from DB]
+        RESUME_TASKID -->|no| AUTO_FIND[Auto-find latest incomplete pipeline]
+        AUTO_FIND --> LOAD_PS
+        LOAD_PS --> CLEAN_STALE[Clean stale running rows for this task]
+
+        NEW_MODE[New Mode] --> READ_STORY{Read story from?}
+        READ_STORY -->|file| READ_FILE[readFile story.txt]
+        READ_STORY -->|stdin| READ_STDIN[Read from stdin]
+        READ_FILE --> GEN_TASKID[Generate taskId = randomUUID]
+        READ_STDIN --> GEN_TASKID
+
+        CLEAN_STALE --> GHOST_KILL
+        GEN_TASKID --> GHOST_KILL
+        GHOST_KILL[Kill ghost pipeline processes] --> LOCK_CHECK{Pipeline lock: another running?}
+        LOCK_CHECK -->|yes| ABORT_LOCK
+        LOCK_CHECK -->|no| FLUSH[Flush stale Telegram updates + clear abort flag]
+        FLUSH --> BUILD_COMPLETED[Build completedSet from DB]
+        BUILD_COMPLETED --> CHECK_CONCEPT{concept stage completed?}
+    end
+
+    CHECK_CONCEPT -->|no| STAGE_1B
+    CHECK_CONCEPT -->|yes| STAGE_LOOP
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE 1B - STORY INTAKE
+    %% ═══════════════════════════════════════════════════════════
+    subgraph STAGE_1B[Stage 1B - Story Intake]
+        direction TB
+        S1B_START[Mark concept stage running in DB] --> S1B_CLAUDE[Claude Sonnet: Extract title, theme, synopsis, characters from story]
+        S1B_CLAUDE --> S1B_PARSE[parseClaudeJSON - extract metadata]
+        S1B_PARSE --> S1B_TG_REVIEW[Send concept review to Telegram]
+
+        S1B_TG_REVIEW --> S1B_DECISION{Telegram: Approve or Reject?}
+        S1B_DECISION -->|Approve| S1B_CHAR_APPROVE[Character list approval via Telegram - add/remove/approve loop]
+        S1B_DECISION -->|Reject cycle 1-3| S1B_REEXTRACT[Claude re-extracts with feedback]
+        S1B_REEXTRACT --> S1B_TG_REVIEW
+        S1B_DECISION -->|Reject cycle 4| S1B_FAIL_REJECT[Throw: max rejections]
+
+        S1B_CHAR_APPROVE --> S1B_IDEMPOTENT{pipeline_state exists?}
+        S1B_IDEMPOTENT -->|yes| S1B_SKIP_INSERT[Skip insert - reuse existing concept_id]
+        S1B_IDEMPOTENT -->|no| S1B_INSERT_CONCEPT[INSERT concepts table]
+        S1B_INSERT_CONCEPT --> S1B_INSERT_PS[INSERT pipeline_state - task_id + concept_id]
+        S1B_SKIP_INSERT --> S1B_DONE[Mark concept stage completed]
+        S1B_INSERT_PS --> S1B_DONE
+    end
+
+    S1B_DONE --> STAGE_LOOP
+    S1B_FAIL_REJECT --> PIPELINE_HALT
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE LOOP
+    %% ═══════════════════════════════════════════════════════════
+    STAGE_LOOP[Stage Loop: script - characters - tts - illustrate - animate - assemble - queue] --> S2_CHECK{script completed?}
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE 2 - SCRIPT GENERATION
+    %% ═══════════════════════════════════════════════════════════
+    S2_CHECK -->|skip| S3_CHECK
+    S2_CHECK -->|run| STAGE_2
+
+    subgraph STAGE_2[Stage 2 - Script Generation]
+        direction TB
+        S2_READ[Read concept from DB via pipeline_state FK] --> S2_LOAD_CHARS[Load approved characters from character_library]
+        S2_LOAD_CHARS --> S2_EPISODE_NUM[Count uploaded videos in video_queue for episode number]
+        S2_EPISODE_NUM --> S2_RESUME{Scenes exist in DB?}
+
+        S2_RESUME -->|yes - resume| S2_CHECK_SEO{youtube_seo exists?}
+        S2_CHECK_SEO -->|no| S2_HEAL_SEO[Self-heal: generate fallback SEO + save]
+        S2_CHECK_SEO -->|yes| S2_APPROVAL_LOOP
+
+        S2_RESUME -->|no - fresh| S2_GENERATE[Claude Sonnet: Generate N scenes + youtube_seo - up to 3 attempts]
+        S2_GENERATE --> S2_VALIDATE[Validate: scene count, Tamil Unicode, word count, speakers, emotions]
+        S2_VALIDATE --> S2_ROGUE{Rogue speakers found?}
+        S2_ROGUE -->|yes| S2_NARRATOR_REWRITE[Claude: Rewrite rogue dialogue to narrator perspective]
+        S2_ROGUE -->|no| S2_SAVE
+        S2_NARRATOR_REWRITE --> S2_SAVE
+        S2_SAVE[INSERT scenes + youtube_seo + UPDATE pipeline_state] --> S2_APPROVAL_LOOP
+        S2_HEAL_SEO --> S2_APPROVAL_LOOP
+
+        S2_APPROVAL_LOOP[Per-scene Telegram approval loop] --> S2_SCENE_DECISION{Approve or Reject?}
+        S2_SCENE_DECISION -->|Approve| S2_MARK_APPROVED[UPDATE scenes: script_approved = true]
+        S2_SCENE_DECISION -->|Reject with text:| S2_REPLACE_TEXT[Direct text replacement in DB]
+        S2_SCENE_DECISION -->|Reject with feedback| S2_REGEN_SCENE[Claude: Regenerate scene with feedback]
+        S2_REGEN_SCENE --> S2_UPDATE_SCENE[UPDATE scene in DB + re-review]
+        S2_UPDATE_SCENE --> S2_SCENE_DECISION
+
+        S2_MARK_APPROVED --> S2_NEXT_SCENE{More scenes?}
+        S2_REPLACE_TEXT --> S2_NEXT_SCENE
+        S2_NEXT_SCENE -->|yes| S2_APPROVAL_LOOP
+        S2_NEXT_SCENE -->|no| S2_DONE[Stage 2 Complete]
+    end
+
+    S2_DONE --> S3_CHECK{characters completed?}
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE 3 - CHARACTER PREP
+    %% ═══════════════════════════════════════════════════════════
+    S3_CHECK -->|skip| S6_CHECK
+    S3_CHECK -->|run| STAGE_3
+
+    subgraph STAGE_3[Stage 3 - Character Preparation]
+        direction TB
+        S3_READ[Read concept.characters + scenes from DB] --> S3_RESUME_CHECK[Load episode_characters - build processedNames set]
+        S3_RESUME_CHECK --> S3_CHAR_LOOP[For each character in concept.characters]
+
+        S3_CHAR_LOOP --> S3_PROCESSED{Already processed?}
+        S3_PROCESSED -->|yes| S3_NEXT_CHAR{More characters?}
+        S3_PROCESSED -->|no| S3_LIBRARY{In character_library?}
+
+        S3_LIBRARY -->|yes - existing| S3_EXIST_REVIEW[Telegram: Approve / Customize / Reject]
+        S3_EXIST_REVIEW --> S3_EXIST_ACTION{Action?}
+        S3_EXIST_ACTION -->|Approve| S3_INSERT_EP_APPROVED[INSERT episode_characters: status=approved]
+        S3_EXIST_ACTION -->|Customize| S3_EP_IMAGE[Generate episode-specific reference image - up to 3 cycles]
+        S3_EXIST_ACTION -->|Reject| S3_INSERT_EP_REJECTED[INSERT episode_characters: status=rejected]
+        S3_EP_IMAGE --> S3_INSERT_EP_APPROVED
+
+        S3_LIBRARY -->|no - missing| S3_CLAUDE_PROPOSAL[Claude: Generate character proposal]
+        S3_CLAUDE_PROPOSAL --> S3_PROPOSAL_TG[Telegram: Approve / Reject proposal - up to 4 cycles]
+        S3_PROPOSAL_TG --> S3_PROPOSAL_ACTION{Approved?}
+        S3_PROPOSAL_ACTION -->|yes| S3_CLASSIFY[Claude: Classify voice type - kid/elder_male/elder_female]
+        S3_CLASSIFY --> S3_PICK_VOICE[pickVoiceFromPool - avoid duplicates]
+        S3_PICK_VOICE --> S3_INSERT_LIBRARY[INSERT character_library - permanent]
+        S3_INSERT_LIBRARY --> S3_INSERT_EP_NEW[INSERT episode_characters]
+        S3_PROPOSAL_ACTION -->|reject 4x| S3_FAIL_CHAR[Throw: character rejected too many times]
+
+        S3_INSERT_EP_APPROVED --> S3_NEXT_CHAR
+        S3_INSERT_EP_REJECTED --> S3_NEXT_CHAR
+        S3_INSERT_EP_NEW --> S3_NEXT_CHAR
+
+        S3_NEXT_CHAR -->|yes| S3_CHAR_LOOP
+        S3_NEXT_CHAR -->|no| S3_REF_IMAGES[Generate reference images for chars without one - up to 3 cycles per char]
+        S3_REF_IMAGES --> S3_UPLOAD_REF[Upload to Storage: characters bucket]
+        S3_UPLOAD_REF --> S3_DONE[Stage 3 Complete]
+    end
+
+    S3_DONE --> S6_CHECK{tts completed?}
+    S3_FAIL_CHAR --> PIPELINE_HALT
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE 6 - VOICE / TTS (runs before illustration)
+    %% ═══════════════════════════════════════════════════════════
+    S6_CHECK -->|skip| S4_CHECK
+    S6_CHECK -->|run| STAGE_6
+
+    subgraph STAGE_6[Stage 6 - Voice / TTS]
+        direction TB
+        S6_READ[Read scenes from DB - filter audio_status != completed] --> S6_ENHANCE[Claude Haiku: Batch enhance dialogues with v3 audio tags]
+        S6_ENHANCE --> S6_SCENE_LOOP[Per-scene TTS loop]
+
+        S6_SCENE_LOOP --> S6_RESOLVE_VOICE[Resolve voice: episode_characters - character_library - VOICE_MAP - default]
+        S6_RESOLVE_VOICE --> S6_TTS[ElevenLabs v3 TTS: generate audio MP3]
+        S6_TTS --> S6_UPLOAD_AUDIO[Upload audio to Storage: scenes bucket]
+        S6_UPLOAD_AUDIO --> S6_FEEDBACK{Feedback mode?}
+
+        S6_FEEDBACK -->|off| S6_AUTO_APPROVE[Auto-approve: UPDATE scenes audio_status=completed]
+        S6_FEEDBACK -->|on| S6_TG_AUDIO[Send audio to Telegram for review]
+        S6_TG_AUDIO --> S6_AUDIO_DECISION{Approve or Reject?}
+        S6_AUDIO_DECISION -->|Approve| S6_MARK_DONE[UPDATE scenes: audio_url, enhanced_text, audio_status=completed]
+        S6_AUDIO_DECISION -->|Reject with text:| S6_REPLACE_DIALOGUE[Replace dialogue text + re-enhance + re-generate TTS]
+        S6_AUDIO_DECISION -->|Reject with feedback| S6_EMOTION_HINT[Extract emotion hint + re-enhance + re-generate TTS]
+        S6_REPLACE_DIALOGUE --> S6_TG_AUDIO
+        S6_EMOTION_HINT --> S6_TG_AUDIO
+
+        S6_AUTO_APPROVE --> S6_NEXT_SCENE{More scenes?}
+        S6_MARK_DONE --> S6_NEXT_SCENE
+        S6_NEXT_SCENE -->|yes| S6_SCENE_LOOP
+        S6_NEXT_SCENE -->|no| S6_DONE[Stage 6 Complete]
+    end
+
+    S6_DONE --> S4_CHECK{illustrate completed?}
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE 4 - ILLUSTRATION
+    %% ═══════════════════════════════════════════════════════════
+    S4_CHECK -->|skip| S5_CHECK
+    S4_CHECK -->|run| STAGE_4
+
+    subgraph STAGE_4[Stage 4 - Scene Illustration]
+        direction TB
+        S4_READ[Read concept + scenes + episode_characters from DB] --> S4_DOWNLOAD_REFS[Download character reference images from Storage]
+        S4_DOWNLOAD_REFS --> S4_SCENE_LOOP[Per-scene illustration loop]
+
+        S4_SCENE_LOOP --> S4_SKIP{image_status completed?}
+        S4_SKIP -->|yes| S4_NEXT_SCENE2
+        S4_SKIP -->|no| S4_BUILD_PROMPT[buildScenePrompt with artStyle + aspectRatio]
+        S4_BUILD_PROMPT --> S4_GENERATE[Gemini 3.1 Flash: Generate image with up to 4 reference images]
+        S4_GENERATE --> S4_UPLOAD[Upload to Storage: scenes bucket]
+        S4_UPLOAD --> S4_UPDATE_DB[UPDATE scenes: image_url, prompt_used, image_status=completed]
+        S4_UPDATE_DB --> S4_FEEDBACK{Feedback mode?}
+
+        S4_FEEDBACK -->|off| S4_AUTO[Auto-approve: image_approved=true]
+        S4_FEEDBACK -->|on| S4_TG_IMAGE[Send image to Telegram]
+        S4_TG_IMAGE --> S4_IMG_DECISION{Approve or Reject?}
+        S4_IMG_DECISION -->|Approve| S4_APPROVED[UPDATE: image_approved=true]
+        S4_IMG_DECISION -->|Reject| S4_REGEN[Append feedback to visual_description + regenerate]
+        S4_REGEN --> S4_TG_IMAGE
+
+        S4_AUTO --> S4_DELAY[7s delay - Imagen rate limit]
+        S4_APPROVED --> S4_DELAY
+        S4_DELAY --> S4_NEXT_SCENE2{More scenes?}
+        S4_NEXT_SCENE2 -->|yes| S4_SCENE_LOOP
+        S4_NEXT_SCENE2 -->|no| S4_DONE[Stage 4 Complete]
+    end
+
+    S4_DONE --> S5_CHECK{animate completed?}
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE 5 - ANIMATION
+    %% ═══════════════════════════════════════════════════════════
+    S5_CHECK -->|skip| S7_CHECK
+    S5_CHECK -->|run| STAGE_5
+
+    subgraph STAGE_5[Stage 5 - Animation via Wan 2.6]
+        direction TB
+        S5_READ[Read concept + scenes with image_url from DB] --> S5_PROVIDER{Select animation provider}
+        S5_PROVIDER -->|env USE_RUNPOD| S5_RUNPOD[RunPod Wan 2.2]
+        S5_PROVIDER -->|DB setting| S5_KIEAI_OR_RUNPOD[kie.ai or RunPod]
+        S5_PROVIDER -->|default| S5_KIEAI[kie.ai Wan 2.6]
+
+        S5_RUNPOD --> S5_SCENE_LOOP
+        S5_KIEAI_OR_RUNPOD --> S5_SCENE_LOOP
+        S5_KIEAI --> S5_SCENE_LOOP
+
+        S5_SCENE_LOOP[Per-scene animation loop] --> S5_SKIP{animation_status completed?}
+        S5_SKIP -->|yes| S5_NEXT2
+        S5_SKIP -->|no| S5_SIGNED_URL[Get signed URL for scene image]
+        S5_SIGNED_URL --> S5_BUILD_PROMPT[buildWanPrompt - max 300 chars]
+        S5_BUILD_PROMPT --> S5_SUBMIT[Submit Wan job]
+        S5_SUBMIT --> S5_POLL[Poll for completion - up to 10min]
+        S5_POLL --> S5_DOWNLOAD_VID[Download animation video]
+        S5_DOWNLOAD_VID --> S5_UPLOAD_ANIM[Upload to Storage: scenes bucket]
+        S5_UPLOAD_ANIM --> S5_UPDATE_DB[UPDATE scenes: animation_url, animation_status=completed]
+
+        S5_SUBMIT -.->|failure| S5_STATIC_FALLBACK[Static fallback: stillImageToVideo - 10s freeze frame]
+        S5_STATIC_FALLBACK --> S5_UPLOAD_ANIM
+
+        S5_UPDATE_DB --> S5_FEEDBACK{Feedback mode?}
+        S5_FEEDBACK -->|off| S5_AUTO[Auto-approve + 10s delay]
+        S5_FEEDBACK -->|on| S5_TG_VIDEO[Send video to Telegram]
+        S5_TG_VIDEO --> S5_ANIM_DECISION{Approve or Reject?}
+        S5_ANIM_DECISION -->|Approve| S5_ANIM_APPROVED[animation_approved=true]
+        S5_ANIM_DECISION -->|Reject| S5_REFINE[Claude: Refine Wan prompt + regenerate]
+        S5_REFINE --> S5_TG_VIDEO
+
+        S5_AUTO --> S5_NEXT2{More scenes?}
+        S5_ANIM_APPROVED --> S5_NEXT2
+        S5_NEXT2 -->|yes| S5_SCENE_LOOP
+        S5_NEXT2 -->|no| S5_DONE[Stage 5 Complete]
+    end
+
+    S5_DONE --> S7_CHECK{assemble completed?}
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE 7 - ASSEMBLY
+    %% ═══════════════════════════════════════════════════════════
+    S7_CHECK -->|skip| S8_CHECK
+    S7_CHECK -->|run| STAGE_7
+
+    subgraph STAGE_7[Stage 7 - Video Assembly via FFmpeg]
+        direction TB
+        S7_READ[Read concept + all scenes from DB] --> S7_DOWNLOAD[Download ALL assets from Storage: audio + animation + images]
+        S7_DOWNLOAD --> S7_CLASSIFY[Claude Haiku: Classify scene environments for SFX]
+        S7_CLASSIFY --> S7_PER_SCENE[Per-scene assembly]
+
+        S7_PER_SCENE --> S7_HAS_ANIM{Has animation?}
+        S7_HAS_ANIM -->|yes| S7_MERGE[FFmpeg: mergeClipWithAudio - clip + voice + SFX]
+        S7_HAS_ANIM -->|no| S7_HAS_IMAGE{Has image?}
+        S7_HAS_IMAGE -->|yes| S7_STILL[FFmpeg: stillImageToVideo + audio]
+        S7_HAS_IMAGE -->|no| S7_SKIP_SCENE[Skip scene - warning]
+
+        S7_MERGE --> S7_NEXT_SCENE{More scenes?}
+        S7_STILL --> S7_NEXT_SCENE
+        S7_SKIP_SCENE --> S7_NEXT_SCENE
+        S7_NEXT_SCENE -->|yes| S7_PER_SCENE
+        S7_NEXT_SCENE -->|no| S7_CONCAT[FFmpeg: Concatenate all scene clips]
+
+        S7_CONCAT --> S7_BGM{BGM available?}
+        S7_BGM -->|yes| S7_APPLY_BGM[FFmpeg: Apply BGM overlay - vol 0.2, fade in 2s, fade out 3s]
+        S7_BGM -->|no| S7_LOGO
+
+        S7_APPLY_BGM --> S7_LOGO{Logo available?}
+        S7_LOGO -->|yes| S7_APPLY_LOGO[FFmpeg: Logo overlay top-right 12% width]
+        S7_LOGO -->|no| S7_ENDCARD
+
+        S7_APPLY_LOGO --> S7_ENDCARD{End card available?}
+        S7_ENDCARD -->|yes| S7_APPLY_ENDCARD[FFmpeg: Append end card + re-encode + sync fix]
+        S7_ENDCARD -->|no| S7_SAVE
+
+        S7_APPLY_ENDCARD --> S7_SAVE
+        S7_SAVE[Save to output/taskId/final.mp4] --> S7_DB_WRITE[INSERT video_output + UPDATE pipeline_state.video_output_id]
+        S7_DB_WRITE --> S7_DONE[Stage 7 Complete]
+    end
+
+    S7_DONE --> S8_CHECK{queue completed?}
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STAGE 8 - QUEUE / REVIEW
+    %% ═══════════════════════════════════════════════════════════
+    S8_CHECK -->|skip| PIPELINE_COMPLETE
+    S8_CHECK -->|run| STAGE_8
+
+    subgraph STAGE_8[Stage 8 - Queue for Review]
+        direction TB
+        S8_READ[Read via pipeline_state FKs: concept + youtube_seo + video_output] --> S8_VERIFY[Verify local video file exists]
+        S8_VERIFY --> S8_INSERT[UPSERT video_queue: task_id, title, video_type, local_path, youtube_seo, status=ready]
+        S8_INSERT --> S8_TG_NOTIFY[Telegram: Video ready notification with publish command]
+        S8_TG_NOTIFY --> S8_DONE[Stage 8 Complete]
+    end
+
+    S8_DONE --> PIPELINE_COMPLETE
+
+    %% ═══════════════════════════════════════════════════════════
+    %% END STATES
+    %% ═══════════════════════════════════════════════════════════
+    PIPELINE_COMPLETE([Pipeline Complete - print total cost])
+    PIPELINE_HALT([Pipeline Halted - print resume command])
+    ABORT_LOCK([Aborted - another pipeline running])
+
+    %% ═══════════════════════════════════════════════════════════
+    %% PUBLISH (separate script, on-demand)
+    %% ═══════════════════════════════════════════════════════════
+    subgraph PUBLISH[Publish - publish-video.mjs - on demand]
+        direction TB
+        PUB_LOOKUP[Lookup video_queue by task_id or title] --> PUB_VERIFY[Verify local file]
+        PUB_VERIFY --> PUB_FETCH_SEO[Fetch youtube_seo from DB via FK]
+        PUB_FETCH_SEO --> PUB_UPLOAD[Upload to YouTube as private]
+        PUB_UPLOAD --> PUB_SHORTS{Short format?}
+        PUB_SHORTS -->|yes| PUB_PATCH[Patch: add Shorts tag to title + description]
+        PUB_SHORTS -->|no| PUB_PLAYLIST
+        PUB_PATCH --> PUB_PLAYLIST[Add to YouTube playlist]
+        PUB_PLAYLIST --> PUB_UPDATE[UPDATE video_queue: status=uploaded, youtube_video_id]
+        PUB_UPDATE --> PUB_NOTIFY[Telegram: Published notification]
+    end
