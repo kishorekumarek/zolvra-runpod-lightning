@@ -35,10 +35,6 @@ const OUTPUT_DIR = join(__dirname, '..', 'output');
 async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, videoType = 'long' }) {
   const clipDuration = getDurationSeconds(clipPath);
   const audioDuration = getDurationSeconds(audioPath);
-  // Use clip duration when clip is longer — never trim the animation.
-  // Audio will be padded with silence to fill the remaining clip time.
-  // Only use audio duration when audio is longer (clip will loop to fill).
-  const sceneDur = (audioDuration > 0 && audioDuration > clipDuration) ? audioDuration : clipDuration;
 
   const vScale = getVideoConfig(videoType).videoScale;
   const scaleFilter = `scale=${vScale}:force_original_aspect_ratio=increase,crop=${vScale}`;
@@ -46,60 +42,43 @@ async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, vi
   let effectiveClipPath = clipPath;
   let loopedPath = null;
   if (audioDuration > clipDuration + 0.5) {
-    console.log(`    🔁 Simple looping clip (${clipDuration.toFixed(1)}s → ${sceneDur.toFixed(1)}s)`);
-    loopedPath = await loopVideoToFill({ inputPath: clipPath, outputPath: clipPath.replace('.mp4', '_looped.mp4'), targetDuration: sceneDur });
+    console.log(`    🔁 Simple looping clip (${clipDuration.toFixed(1)}s → ${audioDuration.toFixed(1)}s)`);
+    loopedPath = await loopVideoToFill({ inputPath: clipPath, outputPath: clipPath.replace('.mp4', '_looped.mp4'), targetDuration: audioDuration });
     effectiveClipPath = loopedPath;
   }
 
   try {
     if (sfxPath) {
-      let fc;
-      if (clipDuration > audioDuration + 0.5 && audioDuration > 0) {
-        fc = [
-          `[0:v]${scaleFilter}[vout]`,
-          `[1:a]volume=1.0,apad=whole_dur=${sceneDur}[voice_padded]`,
-          `[2:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.15[sfx]`,
-          `[voice_padded][sfx]amix=inputs=2:duration=longest:normalize=0[aout]`,
-        ].join(';');
-      } else {
-        fc = [
-          `[0:v]${scaleFilter}[vout]`,
-          `[1:a]volume=1.0[voice]`,
-          `[2:a]atrim=duration=${sceneDur},asetpts=PTS-STARTPTS,volume=0.15[sfx]`,
-          `[voice][sfx]amix=inputs=2:duration=longest:normalize=0[aout]`,
-        ].join(';');
-      }
+      const fc = [
+        `[0:v]${scaleFilter}[vout]`,
+        `[1:a]volume=1.0[voice]`,
+        `[2:a]volume=0.15[sfx]`,
+        `[voice][sfx]amix=inputs=2:duration=first[aout]`,
+      ].join(';');
 
       const cmd = [
         `"${FFMPEG}" -y`,
         `-i "${effectiveClipPath}"`,
         `-i "${audioPath}"`,
         `-stream_loop -1 -i "${sfxPath}"`,
-        `-t ${sceneDur}`,
         `-filter_complex "${fc}"`,
         `-map "[vout]"`,
         `-map "[aout]"`,
         `-c:v libx264 -preset fast -crf 22`,
         `-c:a aac -b:a 192k`,
+        `-shortest`,
         `"${outputPath}"`,
       ].join(' ');
       execSync(cmd, { stdio: 'pipe' });
     } else {
-      let audioFilter;
-      if (clipDuration > audioDuration + 0.5 && audioDuration > 0) {
-        audioFilter = `-filter_complex "[1:a]apad=whole_dur=${sceneDur}[aout]" -map 0:v -map "[aout]" -vf "${scaleFilter}"`;
-      } else {
-        audioFilter = `-map 0:v -map 1:a -vf "${scaleFilter}"`;
-      }
-
       const cmd = [
         `"${FFMPEG}" -y`,
         `-i "${effectiveClipPath}"`,
         `-i "${audioPath}"`,
-        `-t ${sceneDur}`,
-        audioFilter,
+        `-vf "${scaleFilter}"`,
         `-c:v libx264 -preset fast -crf 22`,
         `-c:a aac -b:a 192k`,
+        `-shortest`,
         `"${outputPath}"`,
       ].join(' ');
       execSync(cmd, { stdio: 'pipe' });
@@ -110,7 +89,7 @@ async function mergeClipWithAudio({ clipPath, audioPath, sfxPath, outputPath, vi
     }
   }
 
-  return sceneDur;
+  return clipDuration > audioDuration ? clipDuration : audioDuration;
 }
 
 /**
