@@ -341,3 +341,172 @@ flowchart TD
         PUB_PLAYLIST --> PUB_UPDATE[UPDATE video_queue: status=uploaded, youtube_video_id]
         PUB_UPDATE --> PUB_NOTIFY[Telegram: Published notification]
     end
+
+    %% ═══════════════════════════════════════════════════════════
+    %% STYLES
+    %% ═══════════════════════════════════════════════════════════
+
+    %% Terminal nodes
+    style START fill:#4CAF50,stroke:#2E7D32,color:#fff,stroke-width:2px
+    style PIPELINE_COMPLETE fill:#4CAF50,stroke:#2E7D32,color:#fff,stroke-width:2px
+    style PIPELINE_HALT fill:#F44336,stroke:#C62828,color:#fff,stroke-width:2px
+    style ABORT_LOCK fill:#F44336,stroke:#C62828,color:#fff,stroke-width:2px
+
+    %% Decision nodes
+    style PARSE_ARGS fill:#FFF9C4,stroke:#F9A825,color:#333,stroke-width:2px
+    style CHECK_CONCEPT fill:#FFF9C4,stroke:#F9A825,color:#333,stroke-width:2px
+    style S2_CHECK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S3_CHECK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S6_CHECK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S4_CHECK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S5_CHECK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S7_CHECK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S8_CHECK fill:#FFF9C4,stroke:#F9A825,color:#333
+
+    %% Subgraph colors via internal node styling
+    %% Launcher - blue/gray
+    style RESUME_MODE fill:#E3F2FD,stroke:#1565C0,color:#333
+    style NEW_MODE fill:#E3F2FD,stroke:#1565C0,color:#333
+    style GHOST_KILL fill:#E3F2FD,stroke:#1565C0,color:#333
+    style FLUSH fill:#E3F2FD,stroke:#1565C0,color:#333
+    style BUILD_COMPLETED fill:#E3F2FD,stroke:#1565C0,color:#333
+    style LOCK_CHECK fill:#BBDEFB,stroke:#1565C0,color:#333
+    style RESUME_TASKID fill:#BBDEFB,stroke:#1565C0,color:#333
+    style READ_STORY fill:#BBDEFB,stroke:#1565C0,color:#333
+
+    %% Stage 1B - deep purple
+    style S1B_START fill:#EDE7F6,stroke:#5E35B1,color:#333
+    style S1B_CLAUDE fill:#D1C4E9,stroke:#5E35B1,color:#333
+    style S1B_PARSE fill:#EDE7F6,stroke:#5E35B1,color:#333
+    style S1B_TG_REVIEW fill:#CE93D8,stroke:#7B1FA2,color:#fff
+    style S1B_CHAR_APPROVE fill:#CE93D8,stroke:#7B1FA2,color:#fff
+    style S1B_INSERT_CONCEPT fill:#B39DDB,stroke:#5E35B1,color:#fff
+    style S1B_INSERT_PS fill:#B39DDB,stroke:#5E35B1,color:#fff
+    style S1B_DONE fill:#7E57C2,stroke:#4527A0,color:#fff
+    style S1B_DECISION fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S1B_IDEMPOTENT fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S1B_FAIL_REJECT fill:#EF9A9A,stroke:#C62828,color:#333
+
+    %% Stage 2 - teal
+    style S2_READ fill:#E0F2F1,stroke:#00695C,color:#333
+    style S2_GENERATE fill:#80CBC4,stroke:#00695C,color:#333
+    style S2_VALIDATE fill:#E0F2F1,stroke:#00695C,color:#333
+    style S2_SAVE fill:#4DB6AC,stroke:#00695C,color:#fff
+    style S2_APPROVAL_LOOP fill:#26A69A,stroke:#00695C,color:#fff
+    style S2_MARK_APPROVED fill:#00897B,stroke:#004D40,color:#fff
+    style S2_DONE fill:#00695C,stroke:#004D40,color:#fff
+    style S2_SCENE_DECISION fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S2_RESUME fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S2_ROGUE fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S2_CHECK_SEO fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S2_NEXT_SCENE fill:#FFF9C4,stroke:#F9A825,color:#333
+
+    %% Stage 3 - orange
+    style S3_READ fill:#FFF3E0,stroke:#E65100,color:#333
+    style S3_RESUME_CHECK fill:#FFF3E0,stroke:#E65100,color:#333
+    style S3_CHAR_LOOP fill:#FFE0B2,stroke:#E65100,color:#333
+    style S3_EXIST_REVIEW fill:#FFB74D,stroke:#E65100,color:#333
+    style S3_CLAUDE_PROPOSAL fill:#FFA726,stroke:#E65100,color:#fff
+    style S3_CLASSIFY fill:#FF9800,stroke:#E65100,color:#fff
+    style S3_PICK_VOICE fill:#FB8C00,stroke:#E65100,color:#fff
+    style S3_INSERT_LIBRARY fill:#F57C00,stroke:#BF360C,color:#fff
+    style S3_INSERT_EP_NEW fill:#EF6C00,stroke:#BF360C,color:#fff
+    style S3_INSERT_EP_APPROVED fill:#EF6C00,stroke:#BF360C,color:#fff
+    style S3_INSERT_EP_REJECTED fill:#EF9A9A,stroke:#C62828,color:#333
+    style S3_REF_IMAGES fill:#FFE0B2,stroke:#E65100,color:#333
+    style S3_UPLOAD_REF fill:#F57C00,stroke:#BF360C,color:#fff
+    style S3_DONE fill:#E65100,stroke:#BF360C,color:#fff
+    style S3_PROCESSED fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S3_LIBRARY fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S3_EXIST_ACTION fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S3_PROPOSAL_ACTION fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S3_NEXT_CHAR fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S3_FAIL_CHAR fill:#EF9A9A,stroke:#C62828,color:#333
+
+    %% Stage 6 - pink/magenta (TTS)
+    style S6_READ fill:#FCE4EC,stroke:#AD1457,color:#333
+    style S6_ENHANCE fill:#F48FB1,stroke:#AD1457,color:#333
+    style S6_SCENE_LOOP fill:#F06292,stroke:#AD1457,color:#fff
+    style S6_RESOLVE_VOICE fill:#EC407A,stroke:#AD1457,color:#fff
+    style S6_TTS fill:#E91E63,stroke:#880E4F,color:#fff
+    style S6_UPLOAD_AUDIO fill:#D81B60,stroke:#880E4F,color:#fff
+    style S6_MARK_DONE fill:#C2185B,stroke:#880E4F,color:#fff
+    style S6_AUTO_APPROVE fill:#C2185B,stroke:#880E4F,color:#fff
+    style S6_DONE fill:#AD1457,stroke:#880E4F,color:#fff
+    style S6_FEEDBACK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S6_AUDIO_DECISION fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S6_NEXT_SCENE fill:#FFF9C4,stroke:#F9A825,color:#333
+
+    %% Stage 4 - blue (illustration)
+    style S4_READ fill:#E3F2FD,stroke:#1565C0,color:#333
+    style S4_DOWNLOAD_REFS fill:#BBDEFB,stroke:#1565C0,color:#333
+    style S4_SCENE_LOOP fill:#90CAF9,stroke:#1565C0,color:#333
+    style S4_BUILD_PROMPT fill:#64B5F6,stroke:#1565C0,color:#333
+    style S4_GENERATE fill:#42A5F5,stroke:#0D47A1,color:#fff
+    style S4_UPLOAD fill:#2196F3,stroke:#0D47A1,color:#fff
+    style S4_UPDATE_DB fill:#1E88E5,stroke:#0D47A1,color:#fff
+    style S4_DONE fill:#1565C0,stroke:#0D47A1,color:#fff
+    style S4_FEEDBACK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S4_IMG_DECISION fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S4_SKIP fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S4_NEXT_SCENE2 fill:#FFF9C4,stroke:#F9A825,color:#333
+
+    %% Stage 5 - indigo (animation)
+    style S5_READ fill:#E8EAF6,stroke:#283593,color:#333
+    style S5_SCENE_LOOP fill:#9FA8DA,stroke:#283593,color:#333
+    style S5_SIGNED_URL fill:#7986CB,stroke:#283593,color:#fff
+    style S5_BUILD_PROMPT fill:#5C6BC0,stroke:#283593,color:#fff
+    style S5_SUBMIT fill:#3F51B5,stroke:#1A237E,color:#fff
+    style S5_POLL fill:#3949AB,stroke:#1A237E,color:#fff
+    style S5_DOWNLOAD_VID fill:#303F9F,stroke:#1A237E,color:#fff
+    style S5_UPLOAD_ANIM fill:#283593,stroke:#1A237E,color:#fff
+    style S5_UPDATE_DB fill:#283593,stroke:#1A237E,color:#fff
+    style S5_STATIC_FALLBACK fill:#FFCC80,stroke:#E65100,color:#333
+    style S5_DONE fill:#1A237E,stroke:#0D1642,color:#fff
+    style S5_PROVIDER fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S5_FEEDBACK fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S5_ANIM_DECISION fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S5_SKIP fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S5_NEXT2 fill:#FFF9C4,stroke:#F9A825,color:#333
+
+    %% Stage 7 - green (assembly)
+    style S7_READ fill:#E8F5E9,stroke:#2E7D32,color:#333
+    style S7_DOWNLOAD fill:#A5D6A7,stroke:#2E7D32,color:#333
+    style S7_CLASSIFY fill:#81C784,stroke:#2E7D32,color:#333
+    style S7_PER_SCENE fill:#66BB6A,stroke:#2E7D32,color:#fff
+    style S7_MERGE fill:#4CAF50,stroke:#1B5E20,color:#fff
+    style S7_STILL fill:#43A047,stroke:#1B5E20,color:#fff
+    style S7_CONCAT fill:#388E3C,stroke:#1B5E20,color:#fff
+    style S7_APPLY_BGM fill:#2E7D32,stroke:#1B5E20,color:#fff
+    style S7_APPLY_LOGO fill:#2E7D32,stroke:#1B5E20,color:#fff
+    style S7_APPLY_ENDCARD fill:#2E7D32,stroke:#1B5E20,color:#fff
+    style S7_SAVE fill:#1B5E20,stroke:#0A3A0A,color:#fff
+    style S7_DB_WRITE fill:#1B5E20,stroke:#0A3A0A,color:#fff
+    style S7_DONE fill:#1B5E20,stroke:#0A3A0A,color:#fff
+    style S7_HAS_ANIM fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S7_HAS_IMAGE fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S7_BGM fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S7_LOGO fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S7_ENDCARD fill:#FFF9C4,stroke:#F9A825,color:#333
+    style S7_NEXT_SCENE fill:#FFF9C4,stroke:#F9A825,color:#333
+
+    %% Stage 8 - amber (queue)
+    style S8_READ fill:#FFF8E1,stroke:#FF6F00,color:#333
+    style S8_VERIFY fill:#FFECB3,stroke:#FF6F00,color:#333
+    style S8_INSERT fill:#FFD54F,stroke:#FF6F00,color:#333
+    style S8_TG_NOTIFY fill:#FFCA28,stroke:#FF6F00,color:#333
+    style S8_DONE fill:#FF6F00,stroke:#E65100,color:#fff
+
+    %% Publish - red/YouTube
+    style PUB_LOOKUP fill:#FFEBEE,stroke:#D32F2F,color:#333
+    style PUB_VERIFY fill:#FFCDD2,stroke:#D32F2F,color:#333
+    style PUB_FETCH_SEO fill:#EF9A9A,stroke:#D32F2F,color:#333
+    style PUB_UPLOAD fill:#EF5350,stroke:#B71C1C,color:#fff
+    style PUB_PATCH fill:#E53935,stroke:#B71C1C,color:#fff
+    style PUB_PLAYLIST fill:#D32F2F,stroke:#B71C1C,color:#fff
+    style PUB_UPDATE fill:#C62828,stroke:#B71C1C,color:#fff
+    style PUB_NOTIFY fill:#B71C1C,stroke:#7F0000,color:#fff
+    style PUB_SHORTS fill:#FFF9C4,stroke:#F9A825,color:#333
+
+    %% Stage loop node
+    style STAGE_LOOP fill:#37474F,stroke:#263238,color:#fff,stroke-width:2px
