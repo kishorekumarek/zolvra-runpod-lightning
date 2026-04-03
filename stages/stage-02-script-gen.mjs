@@ -500,16 +500,12 @@ function validateScenes(scenes, targetClips, knownCharacters, videoType = 'short
       }
     }
 
-    // Check word count
+    // Check minimum word count
     const wordCount = scene.text.trim().split(/\s+/).length;
     const valConfig = getVideoConfig(videoType);
     const minWords = valConfig.minWordsPerScene;
-    const maxWords = valConfig.maxWordsPerScene;
     if (wordCount < minWords) {
       throw new Error(`Scene ${scene.scene_number} text too short (${wordCount} words, min ${minWords})`);
-    }
-    if (wordCount > maxWords) {
-      throw new Error(`Scene ${scene.scene_number} text too long (${wordCount} words, max ${maxWords})`);
     }
   }
 }
