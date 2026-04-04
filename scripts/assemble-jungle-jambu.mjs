@@ -344,133 +344,12 @@ export async function assembleJungleJambu(taskId, epNumber, epTitleTamil = null)
     console.warn('  ⚠️  Logo file not found — skipping overlay');
   }
 
-  // Get main video dimensions for matching intro/end-card
-  const mainDimsRaw = execSync(
-    `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${mainPath}"`
-  ).toString().trim().split(',');
-  const [mW, mH] = mainDimsRaw.map(Number);
-
-  const partsToConcat = [];
-
-  // Prepare JJ intro with text overlay
-  let introApplied = false;
-  try {
-    await fs.access(JJ_INTRO_PATH);
-
-    // Re-encode intro to match main video dimensions
-    const introReencoded = join(assemblyDir, 'intro-reencoded.mp4');
-    execSync([
-      `"${FFMPEG}" -y`,
-      `-i "${JJ_INTRO_PATH}"`,
-      `-c:v libx264 -preset fast -crf 23`,
-      `-vf "scale=${mW}:${mH}:force_original_aspect_ratio=decrease,pad=${mW}:${mH}:(ow-iw)/2:(oh-ih)/2"`,
-      `-c:a aac -b:a 128k -r 30`,
-      `"${introReencoded}"`,
-    ].join(' '), { stdio: 'pipe' });
-
-    // Apply text overlay with Noto Sans Tamil
-    const introFinal = join(assemblyDir, 'intro-final.mp4');
-    const fontPath = findNotoTamilFont();
-
-    if (fontPath && epTitleTamil) {
-      // Write text to file to safely handle Tamil Unicode characters
-      const textFile = join(assemblyDir, 'intro-text.txt');
-      await fs.writeFile(textFile, `EP${epNumber}\n${epTitleTamil}`, 'utf8');
-
-      const drawFilter = [
-        `drawtext=fontfile='${fontPath}'`,
-        `textfile='${textFile}'`,
-        `x=(w-text_w)/2`,
-        `y=(h*0.65)`,
-        `fontsize=52`,
-        `fontcolor=white`,
-        `line_spacing=10`,
-        `box=1`,
-        `boxcolor=black@0.5`,
-        `boxborderw=12`,
-      ].join(':');
-
-      execSync([
-        `"${FFMPEG}" -y`,
-        `-i "${introReencoded}"`,
-        `-vf "${drawFilter}"`,
-        `-c:v libx264 -preset fast -crf 23`,
-        `-c:a copy`,
-        `"${introFinal}"`,
-      ].join(' '), { stdio: 'pipe' });
-      await fs.unlink(introReencoded).catch(() => {});
-      console.log(`  🎬 Intro text overlay applied (EP${epNumber} + Tamil title)`);
-    } else {
-      if (!fontPath) console.warn('  ⚠️  Noto Sans Tamil font not found — intro text overlay skipped');
-      if (!epTitleTamil) console.warn('  ⚠️  No Tamil title provided — intro text overlay skipped');
-      await fs.rename(introReencoded, introFinal);
-    }
-
-    partsToConcat.push(introFinal);
-    introApplied = true;
-    console.log('  🎬 JJ intro prepared');
-  } catch (err) {
-    console.warn(`  ⚠️  JJ intro not applied: ${err.message}`);
-  }
-
-  // Re-encode main to normalize frame rate/codec before concat
-  const mainReencoded = join(assemblyDir, 'main-reencoded.mp4');
-  execSync([
-    `"${FFMPEG}" -y`,
-    `-i "${mainPath}"`,
-    `-c:v libx264 -preset fast -crf 23 -r 30`,
-    `-c:a aac -b:a 128k`,
-    `"${mainReencoded}"`,
-  ].join(' '), { stdio: 'pipe' });
-  partsToConcat.push(mainReencoded);
-
-  // Prepare JJ end card
-  let endCardApplied = false;
-  try {
-    await fs.access(JJ_END_CARD_PATH);
-    const endCardReencoded = join(assemblyDir, 'end-card-reencoded.mp4');
-    execSync([
-      `"${FFMPEG}" -y`,
-      `-i "${JJ_END_CARD_PATH}"`,
-      `-c:v libx264 -preset fast -crf 23`,
-      `-vf "scale=${mW}:${mH}:force_original_aspect_ratio=decrease,pad=${mW}:${mH}:(ow-iw)/2:(oh-ih)/2"`,
-      `-c:a aac -b:a 128k -r 30`,
-      `"${endCardReencoded}"`,
-    ].join(' '), { stdio: 'pipe' });
-    partsToConcat.push(endCardReencoded);
-    endCardApplied = true;
-    console.log('  📌 JJ end card prepared');
-  } catch (err) {
-    console.warn(`  ⚠️  JJ end card not applied: ${err.message}`);
-  }
-
-  // Concatenate intro + main + end card using concat filter (avoids AAC encoder delay noise)
-  const combinedPath = join(assemblyDir, 'combined.mp4');
-  const inputArgs = partsToConcat.map(p => `-i "${p}"`).join(' ');
-  const streamPairs = partsToConcat.map((_, i) => `[${i}:v][${i}:a]`).join('');
-  const concatFilter = `${streamPairs}concat=n=${partsToConcat.length}:v=1:a=1[vout][aout]`;
-  execSync([
-    `"${FFMPEG}" -y`,
-    inputArgs,
-    `-filter_complex "${concatFilter}"`,
-    `-map "[vout]" -map "[aout]"`,
-    `-c:v libx264 -preset fast -crf 23`,
-    `-c:a aac -b:a 192k`,
-    `"${combinedPath}"`,
-  ].join(' '), { stdio: 'pipe' });
-
-  // Final re-encode with -shortest
+  // final.mp4 = scenes + BGM + logo only (intro/end-card handled separately via prependTitleCard)
   const finalPath = join(assemblyDir, 'final.mp4');
-  execSync([
-    `"${FFMPEG}" -y`,
-    `-i "${combinedPath}"`,
-    `-c:v libx264 -preset fast -crf 23`,
-    `-c:a aac -b:a 128k -shortest`,
-    `"${finalPath}"`,
-  ].join(' '), { stdio: 'pipe' });
+  await fs.rename(mainPath, finalPath);
 
   const duration = getDurationSeconds(finalPath);
-  console.log(`  ✓ Final: ${duration.toFixed(1)}s | logo:${logoApplied ? '✅' : '❌'} intro:${introApplied ? '✅' : '❌'} end-card:${endCardApplied ? '✅' : '❌'}`);
+  console.log(`  ✓ Final: ${duration.toFixed(1)}s | logo:${logoApplied ? '✅' : '❌'}`);
 
   // Save to persistent output directory
   const outputDir = join(OUTPUT_DIR, taskId);
@@ -492,6 +371,142 @@ export async function assembleJungleJambu(taskId, epNumber, epTitleTamil = null)
 
   console.log(`✅ Jungle Jambu EP${epNumber} assembly complete. Final: ${persistentVideoPath}`);
   return persistentVideoPath;
+}
+
+// ── prependTitleCard ──────────────────────────────────────────────────────────
+
+/**
+ * Prepend JJ intro + 3s title card to an existing final.mp4.
+ * Does NOT touch video_queue or Supabase — pure file operation.
+ *
+ * @param {string} taskId
+ * @param {number} epNumber
+ * @param {string} epTitleTamil - Tamil title text
+ * @returns {string} Path to output file (final_with_titlecard.mp4)
+ */
+export async function prependTitleCard(taskId, epNumber, epTitleTamil) {
+  const finalPath   = join(OUTPUT_DIR, taskId, 'final.mp4');
+  const outputPath  = join(OUTPUT_DIR, taskId, 'final_with_titlecard.mp4');
+  const assemblyDir = join(OUTPUT_DIR, taskId, 'titlecard-assembly');
+
+  try { await fs.access(finalPath); } catch {
+    throw new Error(`prependTitleCard: final.mp4 not found at ${finalPath}`);
+  }
+  await fs.mkdir(assemblyDir, { recursive: true });
+  console.log(`🎬 Prepending title card — EP${epNumber}: ${epTitleTamil || '(no title)'}`);
+
+  // Get final.mp4 dimensions + fps
+  const dimsRaw = execSync(
+    `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${finalPath}"`
+  ).toString().trim().split(',');
+  const [mW, mH] = dimsRaw.map(Number);
+
+  const fpsRaw = execSync(
+    `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "${finalPath}"`
+  ).toString().trim();
+  const [fpsNum, fpsDen] = fpsRaw.split('/').map(Number);
+  const fps = Math.round(fpsNum / (fpsDen || 1));
+  console.log(`  📐 ${mW}×${mH} @ ${fps}fps`);
+
+  // Re-encode intro to match final.mp4
+  const introReencoded = join(assemblyDir, 'intro-reencoded.mp4');
+  execSync([
+    `"${FFMPEG}" -y`,
+    `-i "${JJ_INTRO_PATH}"`,
+    `-c:v libx264 -preset fast -crf 23`,
+    `-vf "scale=${mW}:${mH}:force_original_aspect_ratio=decrease,pad=${mW}:${mH}:(ow-iw)/2:(oh-ih)/2"`,
+    `-r ${fps}`,
+    `-c:a aac -b:a 192k`,
+    `"${introReencoded}"`,
+  ].join(' '), { stdio: 'pipe' });
+
+  // Apply text overlay → intro-final.mp4
+  const introFinal = join(assemblyDir, 'intro-final.mp4');
+  const fontPath   = findNotoTamilFont();
+  const textFile   = join(assemblyDir, 'intro-text.txt');
+
+  if (fontPath && epTitleTamil) {
+    await fs.writeFile(textFile, `EP${epNumber}\n${epTitleTamil}`, 'utf8');
+    const drawFilter = [
+      `drawtext=fontfile='${fontPath}'`,
+      `textfile='${textFile}'`,
+      `x=(w-text_w)/2`,
+      `y=(h*0.65)`,
+      `fontsize=52`,
+      `fontcolor=white`,
+      `line_spacing=10`,
+      `box=1`,
+      `boxcolor=black@0.5`,
+      `boxborderw=12`,
+    ].join(':');
+    execSync([
+      `"${FFMPEG}" -y`,
+      `-i "${introReencoded}"`,
+      `-vf "${drawFilter}"`,
+      `-c:v libx264 -preset fast -crf 23`,
+      `-c:a copy`,
+      `"${introFinal}"`,
+    ].join(' '), { stdio: 'pipe' });
+    await fs.unlink(introReencoded).catch(() => {});
+    console.log(`  ✓ Intro text overlay applied (EP${epNumber})`);
+  } else {
+    if (!fontPath) console.warn('  ⚠️  Noto Sans Tamil font not found — text overlay skipped');
+    if (!epTitleTamil) console.warn('  ⚠️  No Tamil title provided — text overlay skipped');
+    await fs.rename(introReencoded, introFinal);
+  }
+
+  // Extract first frame → 3s title card still
+  const titleFrame = join(assemblyDir, 'title-frame.png');
+  execSync([
+    `"${FFMPEG}" -y`,
+    `-ss 0 -i "${introFinal}"`,
+    `-frames:v 1`,
+    `"${titleFrame}"`,
+  ].join(' '), { stdio: 'pipe' });
+
+  const titleCard = join(assemblyDir, 'title-card.mp4');
+  execSync([
+    `"${FFMPEG}" -y`,
+    `-loop 1 -i "${titleFrame}"`,
+    `-f lavfi -i anullsrc=r=44100:cl=stereo`,
+    `-t 3`,
+    `-c:v libx264 -preset fast -crf 23`,
+    `-vf "scale=${mW}:${mH}"`,
+    `-r ${fps}`,
+    `-c:a aac -b:a 192k`,
+    `-shortest`,
+    `"${titleCard}"`,
+  ].join(' '), { stdio: 'pipe' });
+  console.log('  ✓ Title card (3s still) created');
+
+  // Concat intro-final + title-card → prepend.mp4
+  const prependPath = join(assemblyDir, 'prepend.mp4');
+  execSync([
+    `"${FFMPEG}" -y`,
+    `-i "${introFinal}"`,
+    `-i "${titleCard}"`,
+    `-filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[vout][aout]"`,
+    `-map "[vout]" -map "[aout]"`,
+    `-c:v libx264 -preset fast -crf 23`,
+    `-c:a aac -b:a 192k`,
+    `"${prependPath}"`,
+  ].join(' '), { stdio: 'pipe' });
+
+  // Concat prepend.mp4 + final.mp4 → final_with_titlecard.mp4
+  execSync([
+    `"${FFMPEG}" -y`,
+    `-i "${prependPath}"`,
+    `-i "${finalPath}"`,
+    `-filter_complex "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[vout][aout]"`,
+    `-map "[vout]" -map "[aout]"`,
+    `-c:v libx264 -preset fast -crf 23`,
+    `-c:a aac -b:a 192k`,
+    `"${outputPath}"`,
+  ].join(' '), { stdio: 'pipe' });
+
+  const duration = getDurationSeconds(outputPath);
+  console.log(`  ✓ final_with_titlecard.mp4 — ${duration.toFixed(1)}s`);
+  return outputPath;
 }
 
 // ── CLI entry ─────────────────────────────────────────────────────────────────
