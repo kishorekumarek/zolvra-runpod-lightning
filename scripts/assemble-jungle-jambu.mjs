@@ -444,15 +444,18 @@ export async function assembleJungleJambu(taskId, epNumber, epTitleTamil = null)
     console.warn(`  ⚠️  JJ end card not applied: ${err.message}`);
   }
 
-  // Concatenate intro + main + end card
-  const concatListPath = join(assemblyDir, 'concat-list.txt');
-  await fs.writeFile(concatListPath, partsToConcat.map(p => `file '${p}'`).join('\n') + '\n');
-
+  // Concatenate intro + main + end card using concat filter (avoids AAC encoder delay noise)
   const combinedPath = join(assemblyDir, 'combined.mp4');
+  const inputArgs = partsToConcat.map(p => `-i "${p}"`).join(' ');
+  const streamPairs = partsToConcat.map((_, i) => `[${i}:v][${i}:a]`).join('');
+  const concatFilter = `${streamPairs}concat=n=${partsToConcat.length}:v=1:a=1[vout][aout]`;
   execSync([
-    `"${FFMPEG}" -y -f concat -safe 0`,
-    `-i "${concatListPath}"`,
-    `-c copy`,
+    `"${FFMPEG}" -y`,
+    inputArgs,
+    `-filter_complex "${concatFilter}"`,
+    `-map "[vout]" -map "[aout]"`,
+    `-c:v libx264 -preset fast -crf 23`,
+    `-c:a aac -b:a 192k`,
     `"${combinedPath}"`,
   ].join(' '), { stdio: 'pipe' });
 
