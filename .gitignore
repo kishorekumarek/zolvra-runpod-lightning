@@ -5,6 +5,7 @@ node_modules/
 output/
 tmp/
 ASH-MISSION.md
+docs/channel-data.json
 *.mp4
 *.mp3
 *.wav
