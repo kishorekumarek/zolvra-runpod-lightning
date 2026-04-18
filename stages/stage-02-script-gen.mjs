@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import { getSupabase } from '../lib/supabase.mjs';
 import { callClaude } from '../../shared/claude.mjs';
 import { callGemini } from '../../shared/gemini.mjs';
-import { getSetting } from '../lib/settings.mjs';
+import { getSetting, isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { sendTelegramMessage, sendTelegramMessageWithButtons, waitForTelegramResponse } from '../lib/telegram.mjs';
 import { DEFAULT_VIDEO_TYPE, getVideoConfig, DEFAULTS } from '../lib/video-config.mjs';
 import { parseClaudeJSON } from '../lib/parse-claude-json.mjs';
@@ -369,6 +369,22 @@ export async function runStage2(taskId, tracker, state = {}) {
     });
     await updatePipelineState(taskId, { youtube_seo_id: seoId, episode_number: episodeNumber });
     console.log(`  ✓ youtube_seo saved to DB (seo_id: ${seoId})`);
+  }
+
+  const feedbackMode = await isFeedbackCollectionMode();
+
+  // Auto-mode: skip per-scene approval, mark all scenes as script_approved in DB.
+  if (!feedbackMode) {
+    await sendTelegramMessage(
+      `📝 Stage 2 (auto) — script generated: "${concept.title}" (Ep. ${episodeNumber}) — ${scenes.length} scenes auto-approved`,
+    );
+    for (const scene of scenes) {
+      const sceneNum = scene.scene_number;
+      if (alreadyApproved.has(sceneNum)) continue;
+      await updateScene(taskId, sceneNum, { script_approved: true });
+    }
+    console.log(`✅ Stage 2 complete (auto-mode) — ${scenes.length} scenes auto-approved.`);
+    return;
   }
 
   // ── Per-scene approval loop via Telegram ─────────────────────────

@@ -19,6 +19,7 @@ import {
   getPipelineState, getConcept, getScenes,
   getEpisodeCharacters, insertEpisodeCharacter, updateEpisodeCharacter,
 } from '../lib/pipeline-db.mjs';
+import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 
 const STAGE = 3;
 const MAX_REJECT_CYCLES = 3;
@@ -110,6 +111,11 @@ export async function runStage3(taskId, tracker, state = {}) {
   const characterNames = concept.characters || [];
   const artStyle = concept.art_style || '3D Pixar animation still';
 
+  const feedbackMode = await isFeedbackCollectionMode();
+  if (!feedbackMode) {
+    await sendTelegramMessage(`👤 Stage 3 (auto) — preparing ${characterNames.length} characters: ${characterNames.join(', ')}`);
+  }
+
   // Load scenes for visual context when generating missing characters
   const dbScenes = await getScenes(taskId);
 
@@ -180,6 +186,32 @@ export async function runStage3(taskId, tracker, state = {}) {
       const character = chars[0];
 
       // ── B. Review existing character ────────────────────────────────
+      // Auto-mode: accept library entry as-is, no Telegram prompt.
+      if (!feedbackMode) {
+        // Still try to load cached reference image buffer (used by section D)
+        let refBuffer = null;
+        try {
+          const storagePath = `${character.id}/v${character.version || 1}.png`;
+          refBuffer = await downloadFromStorage({ bucket: BUCKETS.characters, path: storagePath });
+        } catch { /* not cached */ }
+        if (character.voice_id && character.voice_id !== 'PLACEHOLDER') {
+          usedVoiceIds.add(character.voice_id);
+        }
+        await insertEpisodeCharacter(taskId, {
+          character_name: name.toLowerCase(),
+          voice_id: character.voice_id,
+          image_prompt: character.image_prompt,
+          reference_image_url: character.reference_image_url,
+          episode_image_url: null,
+          tweaks: null,
+          status: 'approved',
+        });
+        characterMap[name] = character;
+        if (refBuffer) characterMap[name].referenceImageBuffer = refBuffer;
+        console.log(`  ✓ ${name}: auto-approved from library`);
+        continue;
+      }
+
       // Try to load and show existing cached reference image
       let existingRefPath = null;
       try {
@@ -384,6 +416,41 @@ Return ONLY a JSON object. No markdown. No explanation.
 
       proposal = parseClaudeJSON(initialMsg.content[0]?.text, `Stage 3 character proposal for ${missingName}`);
 
+      // Auto-mode: accept the first proposal, no Telegram approval loop.
+      if (!feedbackMode) {
+        const { changed_fields, ...cleanProposal } = proposal;
+        const charType = await classifyCharacterType(missingName, cleanProposal.description);
+        const assignedVoiceId = pickVoiceFromPool(charType, usedVoiceIds);
+        usedVoiceIds.add(assignedVoiceId);
+        console.log(`  🎙️ ${missingName}: classified as ${charType} → voice ${assignedVoiceId.slice(0, 8)}...`);
+
+        const { data: inserted, error: insertErr } = await supabase
+          .from('character_library')
+          .insert({
+            name: missingName,
+            description: cleanProposal.description,
+            image_prompt: cleanProposal.image_prompt,
+            voice_id: assignedVoiceId,
+            approved: true,
+          })
+          .select()
+          .single();
+        if (insertErr) throw new Error(`Failed to insert character ${missingName}: ${insertErr.message}`);
+
+        await insertEpisodeCharacter(taskId, {
+          character_name: missingName.toLowerCase(),
+          voice_id: assignedVoiceId,
+          image_prompt: cleanProposal.image_prompt,
+          reference_image_url: inserted.reference_image_url || null,
+          episode_image_url: null,
+          tweaks: null,
+          status: 'approved',
+        });
+        characterMap[missingName] = inserted;
+        console.log(`  ✓ ${missingName}: auto-created from proposal`);
+        continue;
+      }
+
       let previousProposal = null;
 
       for (let cycle = 0; cycle <= MAX_REJECT_CYCLES; cycle++) {
@@ -530,6 +597,44 @@ Return ONLY JSON. No markdown. No explanation.
     let currentImagePrompt = (character.image_prompt || character.description || name) +
       `, full body, plain white background, reference sheet, ${artStyle}, child-friendly`;
     let imageApproved = false;
+
+    // Auto-mode: generate once, upload, skip approval loop.
+    if (!feedbackMode) {
+      try {
+        const buffer = await generateSceneImage({
+          prompt: currentImagePrompt,
+          sceneNumber: 0,
+          aspectRatio: '1:1',
+        });
+        await fs.writeFile(refPath, buffer);
+        character.referenceImageBuffer = buffer;
+        let refStoragePath = null;
+        try {
+          await uploadCharacterImage({ characterId: charId, version: charVersion, buffer });
+        } catch (uploadErr) {
+          console.warn(`  ⚠️  ${name}: cache upload failed: ${uploadErr.message}`);
+        }
+        try {
+          refStoragePath = await uploadToStorage({
+            bucket: BUCKETS.characters,
+            path: `${taskId}/${name}_ref.png`,
+            buffer,
+            contentType: 'image/png',
+          });
+          await supabase.from('character_library').update({ reference_image_url: refStoragePath }).eq('name', name);
+        } catch (refErr) {
+          console.warn(`  ⚠️  ${name}: reference_image_url update failed (non-fatal): ${refErr.message}`);
+        }
+        if (refStoragePath) {
+          await updateEpisodeCharacter(taskId, name, { reference_image_url: refStoragePath });
+        }
+        imageApproved = true;
+        console.log(`  ✓ ${name}: reference image auto-generated`);
+      } catch (err) {
+        console.warn(`  ⚠️  Reference image gen failed for ${name} (auto-mode): ${err.message}`);
+      }
+      continue;
+    }
 
     for (let imgCycle = 0; imgCycle < MAX_IMAGE_CYCLES; imgCycle++) {
       try {

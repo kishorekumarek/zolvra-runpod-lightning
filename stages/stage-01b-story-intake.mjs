@@ -13,6 +13,7 @@ import {
 import { approveCharacterList } from '../lib/character-approval.mjs';
 import { parseClaudeJSON } from '../lib/parse-claude-json.mjs';
 import { insertConcept, insertPipelineState, getPipelineState } from '../lib/pipeline-db.mjs';
+import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { DEFAULTS } from '../lib/video-config.mjs';
 
 /**
@@ -77,6 +78,40 @@ Return ONLY a JSON object. No markdown. No explanation.
   console.log(`  Theme: ${concept.theme}`);
   console.log(`  Art style: ${concept.artStyle}`);
   console.log(`  Characters: ${concept.characters.join(', ')}`);
+
+  const feedbackMode = await isFeedbackCollectionMode();
+
+  // Auto-mode: skip approval, persist concept + characters as-is, send notification.
+  if (!feedbackMode) {
+    await sendTelegramMessage(
+      `📖 Stage 1B (auto) — concept extracted: "${concept.title}"\n` +
+      `Characters: ${concept.characters.join(', ')}`,
+    );
+
+    if (taskId) {
+      const existing = await getPipelineState(taskId);
+      if (existing?.concept_id) {
+        concept.conceptId = existing.concept_id;
+        console.log(`  ↩️  pipeline_state already exists (concept_id: ${existing.concept_id}) — skipping insert`);
+      } else {
+        const conceptId = await insertConcept({
+          title: concept.title,
+          theme: concept.theme,
+          synopsis: concept.synopsis,
+          characters: concept.characters,
+          outline: concept.outline,
+          art_style: concept.artStyle || DEFAULTS.artStyle,
+          video_type: concept.videoType || 'short',
+        });
+        await insertPipelineState(taskId, conceptId);
+        concept.conceptId = conceptId;
+        console.log(`  ✓ Concept saved to new tables (concept_id: ${conceptId})`);
+      }
+    }
+
+    console.log(`✅ Stage 1B complete (auto-mode)`);
+    return concept;
+  }
 
   // Telegram approval gate
   let lastParsed = parsed;
