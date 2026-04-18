@@ -4,6 +4,7 @@ node_modules/
 .DS_Store
 output/
 tmp/
+ASH-MISSION.md
 *.mp4
 *.mp3
 *.wav
