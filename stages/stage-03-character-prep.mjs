@@ -108,16 +108,33 @@ export async function runStage3(taskId, tracker, state = {}) {
   if (!ps?.concept_id) throw new Error('Stage 3: pipeline_state not found or missing concept_id');
 
   const concept = await getConcept(ps.concept_id);
-  const characterNames = concept.characters || [];
   const artStyle = concept.art_style || '3D Pixar animation still';
+
+  // Load character_descriptions from Stage 2 (Gemini) if available
+  const geminiCharDescs = ps.character_descriptions || {};
+
+  // Load scenes to extract all unique speakers (Gemini may have created new characters)
+  const dbScenes = await getScenes(taskId);
+
+  // Build character list from scenes (speakers) + concept.characters, excluding narrator
+  const sceneCharacters = new Set();
+  for (const s of dbScenes) {
+    if (s.speaker && s.speaker !== 'narrator') sceneCharacters.add(s.speaker.toLowerCase());
+    if (Array.isArray(s.characters)) {
+      for (const c of s.characters) {
+        if (c !== 'narrator') sceneCharacters.add(c.toLowerCase());
+      }
+    }
+  }
+  for (const name of (concept.characters || [])) {
+    if (name !== 'narrator') sceneCharacters.add(name.toLowerCase());
+  }
+  const characterNames = [...sceneCharacters];
 
   const feedbackMode = await isFeedbackCollectionMode();
   if (!feedbackMode) {
     await sendTelegramMessage(`👤 Stage 3 (auto) — preparing ${characterNames.length} characters: ${characterNames.join(', ')}`);
   }
-
-  // Load scenes for visual context when generating missing characters
-  const dbScenes = await getScenes(taskId);
 
   // Check resume: which characters are already approved in episode_characters
   const alreadyApproved = await getEpisodeCharacters(taskId);
@@ -387,7 +404,20 @@ export async function runStage3(taskId, tracker, state = {}) {
       // Skip if already processed (resume)
       if (processedNames.has(missingName.toLowerCase())) continue;
 
-      const genSystemPrompt = `You are a character designer for a Tamil children's YouTube channel called @tinytamiltales.
+      // Use Gemini's character description from Stage 2 if available
+      const geminiDesc = geminiCharDescs[missingName] || geminiCharDescs[missingName.toLowerCase()] || null;
+
+      let proposal;
+      if (geminiDesc) {
+        // Gemini already described this character — use it directly
+        console.log(`  📝 ${missingName}: using Gemini description from Stage 2`);
+        proposal = {
+          description: geminiDesc,
+          image_prompt: `${geminiDesc}, full body, ${artStyle}, child-friendly`,
+        };
+      } else {
+        // Fallback: ask Claude to generate description from scene context
+        const genSystemPrompt = `You are a character designer for a Tamil children's YouTube channel called @tinytamiltales.
 
 Given a character name and story context, generate:
 1. description — 1-2 sentence character description (age, gender, personality, role in story). Be specific about age — this is used for voice assignment.
@@ -399,22 +429,22 @@ Return ONLY a JSON object. No markdown. No explanation.
   "image_prompt": "..."
 }`;
 
-      const conceptContext = dbScenes.length > 0
-        ? dbScenes.filter(s => s.speaker?.toLowerCase() === missingName.toLowerCase()).slice(0, 3).map(s => s.visual_description).join('; ')
-        : '';
+        const conceptContext = dbScenes.length > 0
+          ? dbScenes.filter(s => s.speaker?.toLowerCase() === missingName.toLowerCase()).slice(0, 3).map(s => s.visual_description).join('; ')
+          : '';
 
-      let proposal;
-      const initialMsg = await callClaude({
-        model: 'claude-sonnet-4-6',
-        maxTokens: 512,
-        system: genSystemPrompt,
-        messages: [{
-          role: 'user',
-          content: `Character name: ${missingName}\nStory context: ${conceptContext || 'No additional context'}`,
-        }],
-      });
+        const initialMsg = await callClaude({
+          model: 'claude-sonnet-4-6',
+          maxTokens: 512,
+          system: genSystemPrompt,
+          messages: [{
+            role: 'user',
+            content: `Character name: ${missingName}\nStory context: ${conceptContext || 'No additional context'}`,
+          }],
+        });
 
-      proposal = parseClaudeJSON(initialMsg.content[0]?.text, `Stage 3 character proposal for ${missingName}`);
+        proposal = parseClaudeJSON(initialMsg.content[0]?.text, `Stage 3 character proposal for ${missingName}`);
+      }
 
       // Auto-mode: accept the first proposal, no Telegram approval loop.
       if (!feedbackMode) {

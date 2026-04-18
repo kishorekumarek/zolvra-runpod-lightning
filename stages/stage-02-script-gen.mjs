@@ -1,215 +1,71 @@
-// stages/stage-02-script-gen.mjs — Claude generates flat scene array → Telegram review
-// REWRITTEN for pipeline schema rewrite: reads concept from DB, writes to scenes + youtube_seo tables.
-// Dual-write: also writes old pipeline_state JSONB + returns old state format for un-rewritten stages.
+// stages/stage-02-script-gen.mjs — Gemini generates flat scene array → Telegram review
+// Reads concept from DB, calls Gemini to generate script, writes to scenes + youtube_seo tables.
 import 'dotenv/config';
-import { readFile } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { getSupabase } from '../lib/supabase.mjs';
-import { callClaude } from '../../shared/claude.mjs';
 import { callGemini } from '../../shared/gemini.mjs';
-import { getSetting, isFeedbackCollectionMode } from '../lib/settings.mjs';
+import { isFeedbackCollectionMode } from '../lib/settings.mjs';
 import { sendTelegramMessage, sendTelegramMessageWithButtons, waitForTelegramResponse } from '../lib/telegram.mjs';
-import { DEFAULT_VIDEO_TYPE, getVideoConfig, DEFAULTS } from '../lib/video-config.mjs';
+import { DEFAULT_VIDEO_TYPE, getVideoConfig } from '../lib/video-config.mjs';
 import { parseClaudeJSON } from '../lib/parse-claude-json.mjs';
 import {
   getPipelineState, getConcept, insertScenes, updateScene,
   insertYoutubeSeo, updatePipelineState, getScenes,
 } from '../lib/pipeline-db.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// Load Tamil style guide at module init (non-blocking — awaited before first use)
-let _tamilStyleGuide = null;
-async function getTamilStyleGuide() {
-  if (_tamilStyleGuide) return _tamilStyleGuide;
-  try {
-    _tamilStyleGuide = await readFile(join(__dirname, '..', 'lib', 'tamil-style-guide.md'), 'utf8');
-  } catch {
-    console.warn('  ⚠️  tamil-style-guide.md not found — proceeding without it');
-    _tamilStyleGuide = '';
-  }
-  return _tamilStyleGuide;
-}
-
-let _videoFeedback = null;
-async function getVideoFeedback() {
-  if (_videoFeedback) return _videoFeedback;
-  try {
-    _videoFeedback = await readFile(join(__dirname, '..', 'lib', 'video-feedback.md'), 'utf8');
-  } catch {
-    console.warn('  ⚠️  video-feedback.md not found — proceeding without it');
-    _videoFeedback = '';
-  }
-  return _videoFeedback;
-}
-
-/** Returns true if any Tamil Unicode characters (U+0B80–U+0BFF) are present. */
-function containsTamilUnicode(text) {
-  return /[\u0B80-\u0BFF]/.test(text || '');
-}
-
 const VALID_EMOTIONS = new Set(['excited', 'happy', 'sad', 'scared', 'gentle', 'whisper', 'angry', 'normal']);
 
-/** Build set of known characters from character library + concept characters + narrator. */
-function buildKnownCharacters(characters, conceptCharacters = []) {
-  const speakers = new Set(['narrator']);
-  for (const c of (characters || [])) {
-    speakers.add(c.name.toLowerCase());
-  }
-  for (const name of conceptCharacters) {
-    speakers.add(name.toLowerCase());
-  }
-  return speakers;
-}
+function buildSystemPrompt({ concept, targetClips }) {
+  return `Convert the following story into a ${targetClips}-scene script for a Tamil children's YouTube channel (@tinytamiltales).
 
-/**
- * Rewrite a scene's text from character dialogue to narrator perspective.
- */
-async function rewriteAsNarrator(scene, rogueCharacter, tamilStyleGuide) {
-  try {
-    const msg = await callClaude({
-      model: 'claude-sonnet-4-6',
-      maxTokens: 512,
-      system: `You are a Tamil children's story scriptwriter for @tinytamiltales.
-${tamilStyleGuide ? `\nTAMIL STYLE GUIDE:\n${tamilStyleGuide}\n` : ''}
-TASK: Rewrite the given scene text from first-person character dialogue into third-person narrator narration.
-The original speaker was "${rogueCharacter}" but this character doesn't exist. Rewrite so the narrator describes what "${rogueCharacter}" said or did.
-Keep the same meaning, emotion, and Tamil style. Keep it 20-30 words.
-Return ONLY the rewritten Tamil text. No JSON. No explanation.`,
-      messages: [{
-        role: 'user',
-        content: `Original text (was spoken by "${rogueCharacter}"): ${scene.text}`,
-      }],
-    });
-    return msg.content[0]?.text?.trim() || scene.text;
-  } catch (err) {
-    console.warn(`  ⚠️  Narrator rewrite failed for scene ${scene.scene_number}: ${err.message}`);
-    return scene.text;
-  }
-}
+For each scene provide:
 
-function buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, voiceFeedback, videoType = 'long', artStyle = '3D Pixar animation still' }) {
-  const characterJson = JSON.stringify(
-    (characters || []).map(c => ({ name: c.name, description: c.description })),
-    null, 2
-  );
+Scene Heading: A brief title for the scene.
 
-  const speakerNames = ['narrator', ...(characters || []).map(c => c.name.toLowerCase()), ...(concept.characters || []).map(c => c.toLowerCase())];
-  const speakerList = [...new Set(speakerNames)].join(', ');
+Speaker: Specify one speaker (either a specific character or a Narrator).
 
-  const characterRules = (characters || []).map(c => {
-    const name = c.name;
-    const desc = c.description || '';
-    return `- ${name}: ${desc}`;
-  }).join('\n');
+Tamil Script: The dialogue or narration written in TANGLISH(modern spoken tamil with english words infused) with Tamil script letters, pure english words can be in english. extended dialogue should be 10s long.
 
-  const visualExamples = (characters || []).map(c => {
-    const prompt = c.image_prompt || c.description || '';
-    return `  ✅ "${prompt}"`;
-  }).join('\n');
+English Translation: The English version of that text.
 
-  const styleGuideSection = tamilStyleGuide
-    ? `\n\n---\nTAMIL STYLE GUIDE (HARD CONSTRAINTS — MUST FOLLOW):\n${tamilStyleGuide}\n---`
-    : '';
+Visual Description: A one-liner describing the scene in a 3D Pixar-style animation style.
 
-  const feedbackSection = videoFeedback
-    ? `\n\n---\nVIDEO PRODUCTION FEEDBACK (APPLY TO THIS VIDEO):\n${videoFeedback}\n---`
-    : '';
+Emotion: One of: excited, happy, sad, scared, gentle, whisper, angry, normal
 
-  const voiceFeedbackSection = voiceFeedback
-    ? `\n\n---\nVOICE/TTS FEEDBACK (LEARNED FROM PREVIOUS EPISODES — APPLY TO DIALOGUE):\n${voiceFeedback}\n---`
-    : '';
+Characters: Array of ALL character names visible in the scene (lowercase), including the speaker.
 
-  const vtConfig = getVideoConfig(videoType);
-  const videoTypeNote = `\nVIDEO FORMAT: ${vtConfig.promptFormatText} (${vtConfig.promptDurationText}). Generate exactly ${targetClips} scenes.${videoType === 'short' ? ' Keep each scene punchy and fast-paced.' : ''}`;
+Use only one speaker per scene.
+Ensure the emotional arc of the story is captured across the ${targetClips} scenes.
+The speaker must always be included in the characters array.
 
-  return `You are a Tamil children's story scriptwriter for the YouTube channel @tinytamiltales.${styleGuideSection}${feedbackSection}${voiceFeedbackSection}${videoTypeNote}
+Also generate:
+- youtube_seo with title, description (include Tamil text), and tags array for a Tamil kids story channel.
+- character_descriptions: an object mapping each character name (lowercase) to a one-line physical description suitable for image generation (age, gender, appearance, clothing, distinguishing features). Do NOT include "narrator".
 
-TASK: Generate exactly ${targetClips} scenes for a Tamil kids story. Each scene is ONE visual moment.
-
-HARD RULES (non-negotiable):
-1. Return ONLY a valid JSON object. No markdown. No explanation. No wrapping.
-2. The "scenes" array must contain EXACTLY ${targetClips} objects — no more, no fewer.
-3. Each scene "text" must be in Tamil script (Tamil Unicode — e.g., நான் ரொம்ப குஷி). English loanwords can stay in English (e.g., rainbow, super, okay).
-4. "visual_description" must be in English (used for image generation prompts).
-5. Keep language simple — target age 3–7 years.
-6. "speaker" must be one of: ${speakerList}
-7. "emotion" must be one of: excited, happy, sad, scared, gentle, whisper, angry, normal
-8. Use "narrator" if the character is not in the speaker list above.
-9. Each scene is exactly ONE moment: one action, one line, one emotion. Nothing more.
-10. Each scene "text" must be 20–30 words (not fewer, not more).
-11. Each scene must include a "characters" array listing ALL characters VISIBLE in that scene (lowercase names). Include characters who appear visually even if they don't speak.
-
-CHARACTER RULES (CRITICAL):
-${characterRules}
-- Introduce ALL characters in scenes 1–5
-- First time a character appears, pair their name with a brief identity (species, role, or trait) so the audience knows who they are
-
-LANGUAGE RULES (CRITICAL):
-- NEVER use ழ words: use rain (not mazhai), pretty/beautiful (not azhaga), road/way (not vazhi), veliye vanthaan (not ezhunthaan)
-- Use paarunga (not parunga), irukulla (not irukku illa?), mudiuma (not aaguma), penji ninnuchi (not mudinchitchu)
-- Colloquial contractions only — no formal grammar
-
-DIALOGUE EXPRESSION RULES:
-- Write dialogue with natural punctuation: use ! for excitement, ? for questions, ... for pauses
-- Use emotional Tamil expressions naturally (aiyyo, da, di, pa, ma)
-- Do NOT add audio tags like [excited] or [sighs] — those are added automatically later
-
-VISUAL DESCRIPTION RULES (CRITICAL):
-- Art style for this video: ${artStyle}. Describe scenes with this style in mind.
-- Always describe characters by their physical appearance — never just a name or vague label like "character" or "friend"
-${visualExamples}
-  ❌ "Meenu and her friends" (too vague — Imagen needs physical details)
-  ❌ "character watching" (no identity — generates random output)
-- Describe exact action, lighting, environment, and mood
-- Use the character descriptions from the CHARACTER LIBRARY below for every visual_description
-- KEEP each character's core identity LOCKED (face, skin tone, hair, body type, species) but ADAPT their clothing/accessories to fit the story setting. Describe the adapted outfit in every scene's visual_description so Imagen stays consistent.
-
-${concept.outline ? `STORY OUTLINE (FOLLOW THIS STRUCTURE — do not invent your own arc):
-${concept.outline}
-
-Distribute the outline sections across ${targetClips} scenes. Each scene maps to ONE moment from the outline.` : `STORY ARC (${targetClips} scenes total):
-${vtConfig.storyArc.map(a => `- ${a}`).join('\n')}`}
-
-CHARACTER LIBRARY:
-${characterJson}
-
-STORY CONCEPT:
-Title: ${concept.title}
-Theme: ${concept.theme || ''}
-Synopsis: ${concept.synopsis || ''}
-Characters: ${concept.characters?.join(', ') || ''}
-
-EPISODE NUMBER: ${episodeNumber}
-
-Return ONLY this JSON structure:
+Return ONLY valid JSON, no markdown fences:
 {
-  "youtube_seo": {
-    "title": "...",
-    "description": "...",
-    "tags": ["..."]
+  "youtube_seo": { "title": "...", "description": "...", "tags": ["..."] },
+  "character_descriptions": {
+    "character_name": "one-line physical description for image generation"
   },
   "scenes": [
     {
       "scene_number": 1,
+      "heading": "Scene title",
       "speaker": "narrator",
       "emotion": "gentle",
-      "text": "Tamil script text with English loanwords, 20-30 words (e.g., தன்னோட friends-கிட்ட ஓடி வந்துச்சு)",
-      "visual_description": "English description of exact single visual moment — use full character physical descriptions",
-      "characters": ["meenu", "kavi"]
+      "text": "Tamil TANGLISH dialogue",
+      "english": "English translation",
+      "visual_description": "3D Pixar-style scene description",
+      "characters": ["character1"]
     }
   ]
-}
-
-IMPORTANT: "characters" must list ALL characters VISIBLE in the scene (lowercase), not just the speaker. If narrator is speaking but Meenu and Kavi are shown, characters = ["meenu", "kavi"]. This is used for visual consistency.
-CRITICAL RULE: The speaker must ALWAYS be in the characters array. If uncle_ravi is speaking, characters must include "uncle ravi". Never omit the speaker from characters.`;
+}`;
 }
 
 /**
- * Stage 2: Generate flat scene array via Claude, send to Telegram for approval.
+ * Stage 2: Generate scene array via Gemini, send to Telegram for approval.
  *
- * NEW: reads concept from DB, writes to scenes + youtube_seo tables.
+ * Reads concept from DB, writes to scenes + youtube_seo tables.
  */
 export async function runStage2(taskId, tracker, state = {}) {
   console.log('📝 Stage 2: Generating script...');
@@ -235,17 +91,9 @@ export async function runStage2(taskId, tracker, state = {}) {
   // videoType: read from concept
   const videoType = concept.videoType || concept.video_type || DEFAULT_VIDEO_TYPE;
   const videoConfig = getVideoConfig(videoType);
-  let targetClips = videoConfig.sceneCount;
-  let clipDurationSeconds = videoConfig.clipDurationSeconds;
-  const artStyle = concept.artStyle || concept.art_style || DEFAULTS.artStyle;
+  const targetClips = videoConfig.sceneCount;
 
-  console.log(`  video_type=${videoType}, target_clips=${targetClips}, clip_duration_seconds=${clipDurationSeconds}`);
-
-  // Get character library for Claude context
-  const { data: characters } = await sb
-    .from('character_library')
-    .select('name, description, image_prompt, voice_id, approved')
-    .eq('approved', true);
+  console.log(`  video_type=${videoType}, target_clips=${targetClips}`);
 
   // Generate episode number from video_queue (published videos count)
   const { count: episodeCount } = await sb
@@ -254,14 +102,6 @@ export async function runStage2(taskId, tracker, state = {}) {
     .eq('status', 'uploaded');
 
   const episodeNumber = (episodeCount || 0) + 1;
-
-  // Load Tamil style guide, video feedback, and accumulated voice feedback
-  const tamilStyleGuide = await getTamilStyleGuide();
-  const videoFeedback = await getVideoFeedback();
-  let voiceFeedback = '';
-  try {
-    voiceFeedback = await getSetting('voice_feedback') || '';
-  } catch { /* no voice feedback yet */ }
 
   // ── Check for resume: already-approved scenes in new DB ────────────
   const existingScenes = await getScenes(taskId);
@@ -306,18 +146,16 @@ export async function runStage2(taskId, tracker, state = {}) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         console.log(`  Generation attempt ${attempt}/3...`);
-        const result = await generateScript({ concept, characters: characters || [], episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, voiceFeedback, videoType, artStyle });
-        const knownCharacters = buildKnownCharacters(characters, concept.characters);
-        validateScenes(result.scenes, targetClips, knownCharacters, videoType);
-
-        // Reject if any scene lacks Tamil Unicode
-        const asciiViolation = result.scenes.find(s => !containsTamilUnicode(s.text));
-        if (asciiViolation) {
-          throw new Error(`Scene ${asciiViolation.scene_number} has no Tamil script — must use Tamil Unicode`);
-        }
+        const result = await generateScript({ concept, targetClips });
+        validateScenes(result.scenes, targetClips, videoType);
 
         scenes = result.scenes;
         youtube_seo = result.youtube_seo;
+        // Store character_descriptions from Gemini for Stage 3 to use
+        if (result.character_descriptions) {
+          await updatePipelineState(taskId, { character_descriptions: result.character_descriptions });
+          console.log(`  ✓ ${Object.keys(result.character_descriptions).length} character descriptions saved`);
+        }
         break;
       } catch (err) {
         lastError = err;
@@ -328,28 +166,7 @@ export async function runStage2(taskId, tracker, state = {}) {
 
     if (!scenes) throw new Error(`Script generation failed after 3 attempts: ${lastError?.message}`);
 
-    // Validate no placeholder text slipped through
-    const FORBIDDEN_PLACEHOLDERS = ['same locked description', 'same description', '[locked description]', 'INSERT CHARACTER'];
-    for (const scene of scenes) {
-      for (const placeholder of FORBIDDEN_PLACEHOLDERS) {
-        if (scene.visual_description?.toLowerCase().includes(placeholder.toLowerCase())) {
-          throw new Error(`Scene ${scene.scene_number} visual_description contains placeholder text: "${placeholder}". Fix the script generation prompt.`);
-        }
-      }
-    }
-
-    // Rewrite rogue character scenes to narrator perspective
-    const rogueScenes = scenes.filter(s => s._rogueCharacter);
-    if (rogueScenes.length > 0) {
-      console.warn(`  ⚠️  ${rogueScenes.length} scene(s) had rogue characters — rewriting to narrator perspective`);
-      for (const scene of rogueScenes) {
-        console.log(`  ↩️  Scene ${scene.scene_number}: "${scene._rogueCharacter}" → narrator`);
-        scene.text = await rewriteAsNarrator(scene, scene._rogueCharacter, tamilStyleGuide);
-        delete scene._rogueCharacter;
-      }
-    }
-
-    // Auto-fill youtube_seo if Claude omitted it
+    // Auto-fill youtube_seo if Gemini omitted it
     if (!youtube_seo) {
       youtube_seo = {
         title: `${concept.title} | Tamil Kids Story | Tiny Tamil Tales`,
@@ -430,21 +247,13 @@ export async function runStage2(taskId, tracker, state = {}) {
         } else {
           console.log(`  ↩️  Regenerating scene ${sceneNum} with feedback...`);
           const regenerated = await regenerateSingleScene({
-            scene,
-            scenes,
-            feedback: decision.comment,
-            concept,
-            characters: characters || [],
-            episodeNumber,
-            targetClips,
-            tamilStyleGuide,
-            videoFeedback,
+            scene, scenes, feedback: decision.comment, concept,
           });
           scene.text = regenerated.text;
           scene.visual_description = regenerated.visual_description;
           if (regenerated.speaker) scene.speaker = regenerated.speaker;
           if (regenerated.emotion) scene.emotion = regenerated.emotion;
-          // NEW: update regenerated scene in DB
+          // Update regenerated scene in DB
           await updateScene(taskId, sceneNum, {
             text: scene.text,
             visual_description: scene.visual_description,
@@ -461,25 +270,26 @@ export async function runStage2(taskId, tracker, state = {}) {
 
 }
 
-async function generateScript({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, voiceFeedback, videoType = 'long', artStyle }) {
-  const systemPrompt = buildSystemPrompt({ concept, characters, episodeNumber, targetClips, clipDurationSeconds, tamilStyleGuide, videoFeedback, voiceFeedback, videoType, artStyle: artStyle || concept.artStyle });
+async function generateScript({ concept, targetClips }) {
+  const systemPrompt = buildSystemPrompt({ concept, targetClips });
 
-  const message = await callClaude({
-    model: 'claude-sonnet-4-6',
-    maxTokens: 8192,
+  const storyText = concept.outline || concept.synopsis || concept.title;
+  const raw = await callGemini({
     system: systemPrompt,
-    messages: [{ role: 'user', content: `Generate the complete scene list for "${concept.title}". Return only valid JSON — no markdown fences, no extra text.` }],
+    prompt: `Story:\n${storyText}`,
+    maxTokens: 8192,
   });
 
-  const parsed = parseClaudeJSON(message.content[0]?.text, 'Stage 2 generateScript');
+  const parsed = parseClaudeJSON(raw, 'Stage 2 generateScript (Gemini)');
 
   return {
     scenes: parsed.scenes || parsed,
     youtube_seo: parsed.youtube_seo || null,
+    character_descriptions: parsed.character_descriptions || null,
   };
 }
 
-function validateScenes(scenes, targetClips, knownCharacters, videoType = 'short') {
+function validateScenes(scenes, targetClips, videoType = 'short') {
   if (!Array.isArray(scenes)) throw new Error('scenes is not an array');
   if (scenes.length !== targetClips) {
     throw new Error(`Expected exactly ${targetClips} scenes, got ${scenes.length}`);
@@ -490,14 +300,8 @@ function validateScenes(scenes, targetClips, knownCharacters, videoType = 'short
     if (!scene.text) throw new Error(`Scene ${scene.scene_number} missing text`);
     if (!scene.visual_description) throw new Error(`Scene ${scene.scene_number} missing visual_description`);
 
-    // Auto-fix invalid speaker — flag rogue characters for narrator perspective rewrite
-    const speaker = (scene.speaker || 'narrator').toLowerCase();
-    if (knownCharacters.has(speaker)) {
-      scene.speaker = speaker;
-    } else {
-      scene._rogueCharacter = speaker;
-      scene.speaker = 'narrator';
-    }
+    // Normalize speaker
+    scene.speaker = (scene.speaker || 'narrator').toLowerCase();
 
     // Auto-fix invalid emotion
     const emotion = (scene.emotion || 'normal').toLowerCase();
@@ -507,83 +311,39 @@ function validateScenes(scenes, targetClips, knownCharacters, videoType = 'short
     if (!Array.isArray(scene.characters) || scene.characters.length === 0) {
       scene.characters = scene.speaker !== 'narrator' ? [scene.speaker] : [];
     } else {
-      scene.characters = scene.characters
-        .map(c => c.toLowerCase())
-        .filter(c => knownCharacters.has(c) && c !== 'narrator');
+      scene.characters = scene.characters.map(c => c.toLowerCase());
       // Ensure speaker is in their own scene's characters array
-      if (scene.speaker && scene.speaker !== 'narrator' && !scene.characters.includes(scene.speaker)) {
+      if (scene.speaker !== 'narrator' && !scene.characters.includes(scene.speaker)) {
         scene.characters.push(scene.speaker);
       }
-    }
-
-    // Check minimum word count
-    const wordCount = scene.text.trim().split(/\s+/).length;
-    const valConfig = getVideoConfig(videoType);
-    const minWords = valConfig.minWordsPerScene;
-    if (wordCount < minWords) {
-      throw new Error(`Scene ${scene.scene_number} text too short (${wordCount} words, min ${minWords})`);
     }
   }
 }
 
 /**
- * Regenerate a single scene using Claude, with surrounding scenes as context and user feedback.
+ * Regenerate a single scene using Gemini, with surrounding scenes as context and user feedback.
  */
-async function regenerateSingleScene({ scene, scenes, feedback, concept, characters, episodeNumber, targetClips, tamilStyleGuide, videoFeedback }) {
+async function regenerateSingleScene({ scene, scenes, feedback, concept }) {
   const surroundingContext = scenes
     .filter(s => Math.abs(s.scene_number - scene.scene_number) <= 2)
     .map(s => `Scene ${s.scene_number} (${s.speaker}, ${s.emotion}): ${s.text}`)
     .join('\n');
 
-  const characterJson = JSON.stringify(
-    characters.map(c => ({ name: c.name, description: c.description })),
-    null, 2
-  );
+  const system = `You are a Tamil children's story scriptwriter for @tinytamiltales.
 
-  const systemPrompt = `You are a Tamil children's story scriptwriter for @tinytamiltales.
-${tamilStyleGuide ? `\nTAMIL STYLE GUIDE:\n${tamilStyleGuide}\n` : ''}
-${videoFeedback ? `\nVIDEO FEEDBACK:\n${videoFeedback}\n` : ''}
-CHARACTER LIBRARY:
-${characterJson}
+STORY: "${concept.title}" — ${concept.synopsis || ''}
 
-STORY: "${concept.title}" — ${concept.synopsis}
+TASK: Regenerate ONLY scene ${scene.scene_number} based on the reviewer's feedback. Keep it consistent with surrounding scenes.
 
-TASK: Regenerate ONLY scene ${scene.scene_number} based on the user's feedback. Keep it consistent with surrounding scenes.
-Return ONLY a JSON object: { "scene_number": ${scene.scene_number}, "speaker": "...", "emotion": "...", "text": "Tamil script...", "visual_description": "English...", "characters": ["all", "visible", "characters"] }
-The "characters" array must list ALL characters visible in the scene (lowercase), not just the speaker.
-No markdown. No explanation.`;
+Tamil Script: Written in TANGLISH(modern spoken tamil with english words infused) with Tamil script letters, pure english words can be in english. extended dialogue should be 10s long.
 
-  const message = await callClaude({
-    model: 'claude-sonnet-4-6',
-    maxTokens: 1024,
-    system: systemPrompt,
-    messages: [{
-      role: 'user',
-      content: `Surrounding scenes:\n${surroundingContext}\n\nCurrent scene ${scene.scene_number}:\nSpeaker: ${scene.speaker} | Emotion: ${scene.emotion}\nText: ${scene.text}\nVisual: ${scene.visual_description}\n\nFeedback: ${feedback}\n\nRegenerate this scene. Return only JSON.`,
-    }],
-  });
+Visual Description: A one-liner describing the scene in a 3D Pixar-style animation style.
 
-  return parseClaudeJSON(message.content[0]?.text, `Stage 2 regenerateScene ${scene.scene_number}`);
-}
+Return ONLY valid JSON, no markdown fences:
+{ "scene_number": ${scene.scene_number}, "speaker": "...", "emotion": "...", "text": "...", "english": "...", "visual_description": "...", "characters": ["..."] }`;
 
-function getSampleResult(concept, episodeNumber, targetClips) {
-  const scenes = [];
-  for (let i = 1; i <= targetClips; i++) {
-    scenes.push({
-      scene_number: i,
-      speaker: 'narrator',
-      emotion: 'gentle',
-      text: 'ஒரு அழகான காட்டுல, Kavin, peacock, தன்னோட friends-ஓட happy-ஆ time spend பண்ணிட்டு இருந்தான்.',
-      visual_description: `Tamil forest scene ${i}: a colorful peacock with spread fan tail feathers in a sunny forest clearing`,
-      characters: [],
-    });
-  }
-  return {
-    scenes,
-    youtube_seo: {
-      title: `${concept.title} | Tamil Kids Story | Tiny Tamil Tales`,
-      description: 'A heartwarming Tamil story for little ones. Subscribe to Tiny Tamil Tales!',
-      tags: ['tamil kids story', 'tamil animated story', 'tiny tamil tales', 'சிறுவர் கதை'],
-    },
-  };
+  const prompt = `Surrounding scenes:\n${surroundingContext}\n\nCurrent scene ${scene.scene_number}:\nSpeaker: ${scene.speaker} | Emotion: ${scene.emotion}\nText: ${scene.text}\nVisual: ${scene.visual_description}\n\nFeedback: ${feedback}\n\nRegenerate this scene.`;
+
+  const raw = await callGemini({ system, prompt, maxTokens: 1024 });
+  return parseClaudeJSON(raw, `Stage 2 regenerateScene ${scene.scene_number}`);
 }
