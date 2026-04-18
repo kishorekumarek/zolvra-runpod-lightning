@@ -170,6 +170,7 @@ function applyFinalBgm({ inputPath, bgmPath, outputPath }) {
  */
 export async function runStage7(taskId, tracker, state = {}) {
   console.log('🎞️  Stage 7: Video assembly...');
+  await sendTelegramMessage(`🎞️ Stage 7: Assembling video...`);
 
   // ── Read from DB ───────────────────────────────────────────────────
   const ps = await getPipelineState(taskId);
@@ -407,10 +408,7 @@ export async function runStage7(taskId, tracker, state = {}) {
   await updatePipelineState(taskId, { video_output_id: videoOutputId });
   console.log(`  ✓ video_output saved (id: ${videoOutputId})`);
 
-  if (await isFeedbackCollectionMode()) {
-    await sendTelegramMessage(`🎞️ Assembly complete: ${duration.toFixed(1)}s — ${persistentVideoPath}`);
-  }
-
+  await sendTelegramMessage(`✅ Stage 7 complete — ${duration.toFixed(1)}s final video assembled`);
   console.log(`✅ Stage 7 complete. Final video: ${persistentVideoPath}`);
 
 }

@@ -10,7 +10,7 @@ import { withRetry } from '../lib/retry.mjs';
 import { calcTTSCost } from '../lib/cost-tracker.mjs';
 import { VOICE_MAP, V3_VOICE_SETTINGS } from '../lib/voice-config.mjs';
 import { enhanceDialoguesForTTS, enhanceSingleDialogue } from '../lib/dialogue-enhancer.mjs';
-import { sendApprovalBotMedia, sendTelegramMessageWithButtons, waitForTelegramResponse } from '../lib/telegram.mjs';
+import { sendTelegramMessage, sendApprovalBotMedia, sendTelegramMessageWithButtons, waitForTelegramResponse } from '../lib/telegram.mjs';
 import { recordVoiceFeedback } from '../lib/feedback-engine.mjs';
 import { uploadSceneAudio } from '../lib/storage.mjs';
 import {
@@ -110,6 +110,8 @@ export async function runStage6(taskId, tracker, state = {}) {
   }
 
   const feedbackMode = await isFeedbackCollectionMode();
+
+  await sendTelegramMessage(`🎙️ Stage 6: Generating voice for ${allScenes.length} scenes...`);
 
   // Step 2: Per-scene TTS generation + approval loop
   for (const scene of allScenes) {
@@ -260,6 +262,7 @@ export async function runStage6(taskId, tracker, state = {}) {
   tracker.addCost(STAGE, cost);
   console.log(`  TTS total: ${totalChars} chars = $${cost.toFixed(4)}`);
 
+  await sendTelegramMessage(`✅ Stage 6 complete — ${Object.keys(sceneAudioPaths).length} scenes voiced`);
   console.log(`✅ Stage 6 complete. ${Object.keys(sceneAudioPaths).length} scenes voiced`);
 
 }

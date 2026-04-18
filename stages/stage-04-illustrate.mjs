@@ -70,6 +70,8 @@ export async function runStage4(taskId, tracker, state = {}) {
   const feedbackMode = await isFeedbackCollectionMode();
   let failureCount = 0;
 
+  await sendTelegramMessage(`🎨 Stage 4: Illustrating ${scenes.length} scenes...`);
+
   for (const scene of scenes) {
     const sceneNum = scene.scene_number;
 
@@ -146,6 +148,7 @@ export async function runStage4(taskId, tracker, state = {}) {
     }
   }
 
+  await sendTelegramMessage(`✅ Stage 4 complete — ${Object.keys(sceneImagePaths).length}/${scenes.length} scenes illustrated`);
   console.log(`✅ Stage 4 complete. ${Object.keys(sceneImagePaths).length}/${scenes.length} scenes illustrated`);
 
 }

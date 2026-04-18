@@ -110,9 +110,7 @@ export async function runStage5(taskId, tracker, state = {}) {
   const feedbackMode = await isFeedbackCollectionMode();
   let failureCount = 0;
 
-  if (feedbackMode) {
-    await sendTelegramMessage(`🎬 Stage 5: Animating ${validScenes.length} scenes (one at a time with approval)`);
-  }
+  await sendTelegramMessage(`🎬 Stage 5: Animating ${validScenes.length} scenes...`);
 
   for (let i = 0; i < validScenes.length; i++) {
     const scene = validScenes[i];
@@ -223,6 +221,7 @@ export async function runStage5(taskId, tracker, state = {}) {
     }
   }
 
+  await sendTelegramMessage(`✅ Stage 5 complete — ${Object.keys(sceneAnimPaths).length}/${validScenes.length} scenes animated`);
   console.log(`✅ Stage 5 complete. ${Object.keys(sceneAnimPaths).length}/${validScenes.length} scenes animated`);
 
 }

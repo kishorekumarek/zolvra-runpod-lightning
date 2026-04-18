@@ -18,6 +18,7 @@ const STAGE = 8;
  */
 export async function runStage8(taskId, tracker, state = {}) {
   console.log('📦 Stage 8: Finalize + store in video queue...');
+  await sendTelegramMessage(`📦 Stage 8: Finalizing + queuing video...`);
 
   const sb = getSupabase();
 
