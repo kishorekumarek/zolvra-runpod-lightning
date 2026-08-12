@@ -1,6 +1,5 @@
 // stages/stage-06-voice.mjs — ElevenLabs TTS per scene with v3 audio tag enhancement
-// REWRITTEN for pipeline schema rewrite: reads from DB, uploads audio to storage, writes to scenes table.
-// Dual-write: also returns old sceneAudioPaths for un-rewritten Stage 7.
+// Reads scenes + episode_characters from DB, uploads audio to storage, writes audio_url/enhanced_text/audio_status to scenes table.
 import 'dotenv/config';
 import { promises as fs } from 'fs';
 import { join } from 'path';

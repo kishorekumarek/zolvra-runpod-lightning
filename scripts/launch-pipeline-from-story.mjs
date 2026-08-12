@@ -14,7 +14,7 @@
 //
 // Args:
 //   <story-file>  Path to story text file, or "-" for stdin
-//   [short|long]  Video format: "short" (default, 9:16, 9 scenes) or "long" (16:9, 24 scenes)
+//   [short|long]  Video format: "short" (default, 9:16, 9 scenes) or "long" (16:9, 15 scenes)
 //   --resume      Resume most recent incomplete pipeline (no story file needed)
 //   <task_id>     Optional: resume a specific pipeline by UUID
 
@@ -30,6 +30,7 @@ import { runStage4 } from '../stages/stage-04-illustrate.mjs';
 import { runStage5 } from '../stages/stage-05-animate.mjs';
 import { runStage6 } from '../stages/stage-06-voice.mjs';
 import { runStage7 } from '../stages/stage-07-assemble.mjs';
+import { runStage7b } from '../stages/stage-07b-teaser-assemble.mjs';
 import { runStage8 } from '../stages/stage-08-review.mjs';
 import { flushApprovalUpdates, PipelineAbortError } from '../lib/telegram.mjs';
 import { STAGE_ORDER } from '../lib/stage-ids.mjs';
@@ -57,6 +58,11 @@ const sb = getSupabase();
 // ── Parse CLI args ───────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const isResumeMode = args[0] === '--resume';
+
+// --with-teasers can appear anywhere in argv; strip it before positional parsing
+const teaserFlagIdx = args.indexOf('--with-teasers');
+const withTeasers = teaserFlagIdx !== -1;
+if (withTeasers) args.splice(teaserFlagIdx, 1);
 
 let taskId;
 let storyText;
@@ -89,7 +95,9 @@ if (isResumeMode) {
         .eq('task_id', row.task_id);
 
       const completedCount = (stages || []).filter(s => s.status === 'completed').length;
-      // STAGE_ORDER has 8 entries (concept + 7 stages). Pipeline is complete if all 8 are done.
+      // Pipeline is complete only when every stage in STAGE_ORDER has a completed row.
+      // Stages that short-circuit at runtime (e.g. teaser_assemble when teasers_enabled=false)
+      // still mark themselves completed, so this stays accurate.
       if (completedCount < STAGE_ORDER.length) {
         foundTaskId = row.task_id;
         break;
@@ -207,7 +215,8 @@ if (!completedSet.has('concept')) {
     started_at: new Date().toISOString(),
   }, { onConflict: 'task_id,stage_id' });
 
-  const concept = await extractConceptFromStory(storyText, { videoType, taskId });
+  const teasersEnabled = videoType === 'long' && withTeasers;
+  const concept = await extractConceptFromStory(storyText, { videoType, taskId, teasersEnabled });
   console.log(`\n🎬 YouTube AI Pipeline`);
   console.log(`   Concept: ${concept.title}`);
   console.log(`   Video type: ${videoType}`);
@@ -223,13 +232,14 @@ if (!completedSet.has('concept')) {
 const tracker = new CostTracker(taskId);
 
 const stageFns = {
-  script:      runStage2,
-  characters:  runStage3,
-  tts:         runStage6,
-  illustrate:  runStage4,
-  animate:     runStage5,
-  assemble:    runStage7,
-  queue:       runStage8,
+  script:           runStage2,
+  characters:       runStage3,
+  tts:              runStage6,
+  illustrate:       runStage4,
+  animate:          runStage5,
+  assemble:         runStage7,
+  teaser_assemble:  runStage7b,
+  queue:            runStage8,
 };
 
 // STAGE_ORDER: ['concept', 'script', 'characters', 'tts', 'illustrate', 'animate', 'assemble', 'queue']

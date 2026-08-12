@@ -1,10 +1,7 @@
 // stages/stage-01b-story-intake.mjs — Takes a user-provided story/outline,
 // extracts metadata (title, theme, characters, synopsis) via Claude,
-// sends to Telegram for Darl's approval, and builds a concept object
-// with the full outline for Stage 2.
-//
-// REWRITTEN for pipeline schema rewrite: writes to concepts + pipeline_state tables.
-// Dual-write: also returns concept object for launcher backward compatibility.
+// optionally sends to Telegram for Darl's approval (feedback mode),
+// writes concept + pipeline_state rows, and returns the concept object.
 import 'dotenv/config';
 import { callClaude } from '../../shared/claude.mjs';
 import {
@@ -25,9 +22,12 @@ import { DEFAULTS } from '../lib/video-config.mjs';
  * @param {object} [opts]
  * @param {string} [opts.videoType] - 'short' or 'long' — passed through to concept
  * @param {string} [opts.taskId] - If provided, writes to concepts + pipeline_state tables
+ * @param {boolean} [opts.teasersEnabled=false] - If true (and videoType='long'), Stage 2 will generate teaser plans
  * @returns {{ title, theme, synopsis, characters, outline, videoType?, artStyle, conceptId? }}
  */
-export async function extractConceptFromStory(storyText, { videoType, taskId } = {}) {
+export async function extractConceptFromStory(storyText, { videoType, taskId, teasersEnabled = false } = {}) {
+  // Shorts can't have teasers — enforce defensively (DB CHECK already does this)
+  const effectiveTeasersEnabled = videoType === 'long' && teasersEnabled === true;
   console.log('📖 Stage 1B: Extracting concept from user story...');
 
   const systemPrompt = `You are a metadata extractor for a Tamil children's YouTube channel called @tinytamiltales.
@@ -102,6 +102,7 @@ Return ONLY a JSON object. No markdown. No explanation.
           outline: concept.outline,
           art_style: concept.artStyle || DEFAULTS.artStyle,
           video_type: concept.videoType || 'short',
+          teasers_enabled: effectiveTeasersEnabled,
         });
         await insertPipelineState(taskId, conceptId);
         concept.conceptId = conceptId;

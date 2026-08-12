@@ -1,6 +1,5 @@
 // stages/stage-05-animate.mjs — Wan 2.6 image-to-video per scene
-// REWRITTEN for pipeline schema rewrite: reads from DB, writes to scenes table.
-// Dual-write: returns old sceneAnimPaths for un-rewritten Stage 7.
+// Reads scene image_url from DB, writes animation_url/animation_status to scenes table.
 import 'dotenv/config';
 import { promises as fs } from 'fs';
 import { join } from 'path';
@@ -157,6 +156,22 @@ export async function runStage5(taskId, tracker, state = {}) {
       }
     }
 
+    // Teaser variant: if scene is flagged and teaser 9:16 image exists, also generate 9:16 animation.
+    // Non-fatal — teaser failure doesn't abort the long video.
+    if (scene.is_teaser && scene.image_url_teaser && !scene.animation_url_teaser) {
+      try {
+        await animateSceneTeaser({
+          taskId, scene,
+          teaserImagePath: scene.image_url_teaser,
+          tmpDir, tracker, artStyle, videoType,
+        });
+        await new Promise(r => setTimeout(r, WAN_INTER_JOB_DELAY_MS));
+      } catch (teaserErr) {
+        console.warn(`  ⚠️  Scene ${sceneNum} teaser animation failed (non-fatal): ${teaserErr.message}`);
+        await sendTelegramMessage(`⚠️ Scene ${sceneNum} teaser (9:16) animation failed — long video unaffected`);
+      }
+    }
+
     if (!feedbackMode) {
       approvedAnims[sceneNum] = { approved: true };
       await updateScene(taskId, sceneNum, { animation_approved: true });
@@ -271,6 +286,54 @@ async function animateScene({ taskId, scene, storagePath, tmpDir, tracker, artSt
   tracker.addCost(STAGE, cost);
 
   console.log(`  ✓ Scene ${scene.scene_number} animated via ${providerLabel} ($${cost.toFixed(4)})`);
+  return { scene, animPath, storagePath: animStoragePath };
+}
+
+/**
+ * Generate the 9:16 teaser animation for a teaser-flagged scene.
+ * Uses the already-uploaded 9:16 image (scene.image_url_teaser), runs Wan at 9:16,
+ * writes result to scenes.animation_url_teaser.
+ */
+async function animateSceneTeaser({ taskId, scene, teaserImagePath, tmpDir, tracker, artStyle, videoType }) {
+  const aspectRatio = '9:16';
+  const prompt = buildWanPrompt(scene, artStyle, aspectRatio);
+  const wan = await getAnimationProvider(videoType);
+  const providerLabel = wan === runpodWan ? 'RunPod Wan 2.2' : 'Wan 2.6 (kie.ai)';
+  console.log(`  Submitting ${providerLabel} TEASER (9:16) job for scene ${scene.scene_number}...`);
+
+  const imageUrl = await resolveSignedUrl(teaserImagePath, scene.scene_number);
+
+  const wanTaskId = await withRetry(
+    () => wan.submitWanJob({ imageUrl, prompt, aspectRatio }),
+    { maxRetries: 3, baseDelayMs: 30000, stage: STAGE, taskId }
+  );
+  const videoUrl = await withRetry(
+    () => wan.pollWanJob(wanTaskId, 600000),
+    { maxRetries: 2, baseDelayMs: 15000, stage: STAGE, taskId }
+  );
+  const videoBuffer = await wan.downloadWanVideo(videoUrl);
+
+  const scenesDir = join(tmpDir, 'scenes');
+  await fs.mkdir(scenesDir, { recursive: true });
+  const animPath = join(scenesDir, `scene_${String(scene.scene_number).padStart(2, '0')}_anim_teaser.mp4`);
+  await fs.writeFile(animPath, videoBuffer);
+
+  const animStoragePath = await uploadSceneAnimation({
+    videoId: taskId,
+    sceneNumber: scene.scene_number,
+    buffer: videoBuffer,
+    variant: 'teaser',
+  });
+
+  await updateScene(taskId, scene.scene_number, {
+    animation_url_teaser: animStoragePath,
+  });
+
+  const providerName = wan === runpodWan ? 'runpod' : 'kieai';
+  const cost = calcAnimationCost(1, providerName);
+  tracker.addCost(STAGE, cost);
+
+  console.log(`  ✓ Scene ${scene.scene_number} teaser 9:16 animated via ${providerLabel} ($${cost.toFixed(4)})`);
   return { scene, animPath, storagePath: animStoragePath };
 }
 

@@ -10,11 +10,46 @@ import { parseClaudeJSON } from '../lib/parse-claude-json.mjs';
 import {
   getPipelineState, getConcept, insertScenes, updateScene,
   insertYoutubeSeo, updatePipelineState, getScenes,
+  insertTeaser, getTeasers,
 } from '../lib/pipeline-db.mjs';
 
 const VALID_EMOTIONS = new Set(['excited', 'happy', 'sad', 'scared', 'gentle', 'whisper', 'angry', 'normal']);
 
-function buildSystemPrompt({ concept, targetClips }) {
+function buildTeaserInstructions() {
+  return `
+Also produce 3 teaser plans in "teasers". These are 9:16 Shorts derived from the long video to drive viewers to it.
+
+Fixed archetypes (in this order):
+1. "setup" — hook the premise. Pick 3 early-story scenes that introduce the situation and pose a question. Never resolve it.
+2. "emotional" — isolate the gut-punch moment. Pick 3 scenes (buildup + emotional peak). End before the resolution.
+3. "reveal_aftermath" — tease the consequences without showing the reveal. Pick 3 scenes that imply something big just happened.
+
+Teaser rules:
+- Each teaser uses exactly 3 scene_numbers from the main scenes array (scenes may be shared across teasers).
+- Never include the resolution/payoff scene.
+- "teaser_last_scene_dialogue" must be a SHORTER version of that last scene's dialogue, speakable in ~4 seconds in Tamil TANGLISH, ending on an unresolved beat (mid-sentence, question, or incomplete action). Character + emotion must match the original scene.
+- "narrator_outro_tamil" is a contextual 5–6 second Tamil VO that asks a question specific to that teaser's hook. Do NOT use generic "watch full video" phrasing. Examples of the shape (but write your own, contextual to the story): "ஏன் அப்படி செய்தான்னு தெரியணுமா?", "அடுத்து என்ன ஆச்சுன்னு பாக்கணுமா?", "இதுக்கு பின்னாடி இருக்கற உண்மை என்ன தெரியுமா?".
+- "title_text" is the YouTube title for this teaser — punchy, curiosity-driven, Tamil or Tanglish, max 70 chars.
+- "hook_text" is a short on-screen overlay caption (reserved for future use; write it anyway — 1 short line).
+
+JSON shape for teasers (exactly 3 entries, archetype in the order above):
+"teasers": [
+  {
+    "teaser_number": 1,
+    "archetype": "setup",
+    "scene_numbers": [1, 2, 3],
+    "title_text": "...",
+    "hook_text": "...",
+    "teaser_last_scene_dialogue": "...",
+    "narrator_outro_tamil": "..."
+  },
+  { "teaser_number": 2, "archetype": "emotional", ... },
+  { "teaser_number": 3, "archetype": "reveal_aftermath", ... }
+]`;
+}
+
+function buildSystemPrompt({ concept, targetClips, teasersEnabled }) {
+  const teaserBlock = teasersEnabled ? buildTeaserInstructions() : '';
   return `Convert the following story into a ${targetClips}-scene script for a Tamil children's YouTube channel (@tinytamiltales).
 
 For each scene provide:
@@ -40,7 +75,7 @@ The speaker must always be included in the characters array.
 Also generate:
 - youtube_seo with title, description (include Tamil text), and tags array for a Tamil kids story channel.
 - character_descriptions: an object mapping each character name (lowercase) to a one-line physical description suitable for image generation (age, gender, appearance, clothing, distinguishing features). Do NOT include "narrator".
-
+${teaserBlock}
 Return ONLY valid JSON, no markdown fences:
 {
   "youtube_seo": { "title": "...", "description": "...", "tags": ["..."] },
@@ -58,7 +93,7 @@ Return ONLY valid JSON, no markdown fences:
       "visual_description": "3D Pixar-style scene description",
       "characters": ["character1"]
     }
-  ]
+  ]${teasersEnabled ? ',\n  "teasers": [ ... 3 entries as described above ... ]' : ''}
 }`;
 }
 
@@ -92,8 +127,9 @@ export async function runStage2(taskId, tracker, state = {}) {
   const videoType = concept.videoType || concept.video_type || DEFAULT_VIDEO_TYPE;
   const videoConfig = getVideoConfig(videoType);
   const targetClips = videoConfig.sceneCount;
+  const teasersEnabled = concept.teasers_enabled === true && videoType === 'long';
 
-  console.log(`  video_type=${videoType}, target_clips=${targetClips}`);
+  console.log(`  video_type=${videoType}, target_clips=${targetClips}, teasers_enabled=${teasersEnabled}`);
 
   // Generate episode number from video_queue (published videos count)
   const { count: episodeCount } = await sb
@@ -143,14 +179,17 @@ export async function runStage2(taskId, tracker, state = {}) {
       console.log(`  ✓ Fallback youtube_seo saved (seo_id: ${seoId})`);
     }
   } else {
+    let teasersFromGemini = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         console.log(`  Generation attempt ${attempt}/3...`);
-        const result = await generateScript({ concept, targetClips });
+        const result = await generateScript({ concept, targetClips, teasersEnabled });
         validateScenes(result.scenes, targetClips, videoType);
+        if (teasersEnabled) validateTeasers(result.teasers, result.scenes);
 
         scenes = result.scenes;
         youtube_seo = result.youtube_seo;
+        teasersFromGemini = result.teasers || null;
         // Store character_descriptions from Gemini for Stage 3 to use
         if (result.character_descriptions) {
           await updatePipelineState(taskId, { character_descriptions: result.character_descriptions });
@@ -186,6 +225,32 @@ export async function runStage2(taskId, tracker, state = {}) {
     });
     await updatePipelineState(taskId, { youtube_seo_id: seoId, episode_number: episodeNumber });
     console.log(`  ✓ youtube_seo saved to DB (seo_id: ${seoId})`);
+
+    // ── Teaser plans: insert teaser rows + mark is_teaser on referenced scenes ──
+    if (teasersEnabled && teasersFromGemini) {
+      const existingTeasers = await getTeasers(taskId);
+      if (existingTeasers.length === 0) {
+        const teaserSceneNums = new Set();
+        for (const t of teasersFromGemini) {
+          await insertTeaser(taskId, {
+            teaser_number: t.teaser_number,
+            archetype: t.archetype,
+            scene_numbers: t.scene_numbers,
+            title_text: t.title_text,
+            hook_text: t.hook_text,
+            teaser_last_scene_dialogue: t.teaser_last_scene_dialogue,
+            narrator_outro_tamil: t.narrator_outro_tamil,
+          });
+          for (const n of t.scene_numbers) teaserSceneNums.add(n);
+        }
+        for (const sceneNum of teaserSceneNums) {
+          await updateScene(taskId, sceneNum, { is_teaser: true });
+        }
+        console.log(`  ✓ ${teasersFromGemini.length} teasers saved, ${teaserSceneNums.size} scenes marked is_teaser`);
+      } else {
+        console.log(`  ↩️  ${existingTeasers.length} teasers already exist in DB — skipping teaser insert`);
+      }
+    }
   }
 
   const feedbackMode = await isFeedbackCollectionMode();
@@ -270,8 +335,8 @@ export async function runStage2(taskId, tracker, state = {}) {
 
 }
 
-async function generateScript({ concept, targetClips }) {
-  const systemPrompt = buildSystemPrompt({ concept, targetClips });
+async function generateScript({ concept, targetClips, teasersEnabled = false }) {
+  const systemPrompt = buildSystemPrompt({ concept, targetClips, teasersEnabled });
 
   const storyText = concept.outline || concept.synopsis || concept.title;
   const raw = await callGemini({
@@ -286,7 +351,46 @@ async function generateScript({ concept, targetClips }) {
     scenes: parsed.scenes || parsed,
     youtube_seo: parsed.youtube_seo || null,
     character_descriptions: parsed.character_descriptions || null,
+    teasers: parsed.teasers || null,
   };
+}
+
+const REQUIRED_TEASER_ARCHETYPES = ['setup', 'emotional', 'reveal_aftermath'];
+
+function validateTeasers(teasers, scenes) {
+  if (!Array.isArray(teasers) || teasers.length !== 3) {
+    throw new Error(`Expected exactly 3 teasers, got ${teasers?.length}`);
+  }
+  const sceneNumberSet = new Set(scenes.map(s => s.scene_number));
+  const seenArchetypes = new Set();
+  for (const t of teasers) {
+    if (!REQUIRED_TEASER_ARCHETYPES.includes(t.archetype)) {
+      throw new Error(`Teaser ${t.teaser_number} has invalid archetype: ${t.archetype}`);
+    }
+    if (seenArchetypes.has(t.archetype)) {
+      throw new Error(`Duplicate teaser archetype: ${t.archetype}`);
+    }
+    seenArchetypes.add(t.archetype);
+
+    if (!Array.isArray(t.scene_numbers) || t.scene_numbers.length !== 3) {
+      throw new Error(`Teaser ${t.teaser_number} must have exactly 3 scene_numbers`);
+    }
+    for (const n of t.scene_numbers) {
+      if (!sceneNumberSet.has(n)) {
+        throw new Error(`Teaser ${t.teaser_number} references non-existent scene ${n}`);
+      }
+    }
+    if (!t.title_text?.trim()) throw new Error(`Teaser ${t.teaser_number} missing title_text`);
+    if (!t.teaser_last_scene_dialogue?.trim()) throw new Error(`Teaser ${t.teaser_number} missing teaser_last_scene_dialogue`);
+    if (!t.narrator_outro_tamil?.trim()) throw new Error(`Teaser ${t.teaser_number} missing narrator_outro_tamil`);
+  }
+  // Enforce archetype ordering by teaser_number
+  const sortedByNumber = [...teasers].sort((a, b) => a.teaser_number - b.teaser_number);
+  for (let i = 0; i < 3; i++) {
+    if (sortedByNumber[i].archetype !== REQUIRED_TEASER_ARCHETYPES[i]) {
+      throw new Error(`Teaser ${i + 1} must be archetype "${REQUIRED_TEASER_ARCHETYPES[i]}", got "${sortedByNumber[i].archetype}"`);
+    }
+  }
 }
 
 function validateScenes(scenes, targetClips, videoType = 'short') {

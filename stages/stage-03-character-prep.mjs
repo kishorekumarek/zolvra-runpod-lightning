@@ -1,6 +1,5 @@
 // stages/stage-03-character-prep.mjs — Resolve characters from library + generate reference images
-// REWRITTEN for pipeline schema rewrite: reads from DB, writes to episode_characters table.
-// Dual-write: also returns old characterMap/characterVoiceMap for un-rewritten downstream stages.
+// Reads concept + scenes from DB, writes to episode_characters table.
 import 'dotenv/config';
 import { promises as fs } from 'fs';
 import { join } from 'path';

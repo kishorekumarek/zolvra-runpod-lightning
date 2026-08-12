@@ -12,3 +12,4 @@ docs/channel-data.json
 *.png
 !assets/**/*.png
 !assets/**/*.mp4
+*.pid

@@ -69,7 +69,7 @@ streams/youtube/
 │   ├── stage-02-script-gen.mjs      # Claude API → JSON script → Telegram review
 │   ├── stage-03-character-prep.mjs  # Resolve characters from library
 │   ├── stage-06-voice.mjs           # ElevenLabs TTS per line
-│   ├── stage-04-illustrate.mjs      # Scene images via Google AI Imagen
+│   ├── stage-04-illustrate.mjs      # Scene images via Gemini 3.1 Flash Image
 │   ├── stage-05-animate.mjs         # Wan 2.6 image-to-video per scene
 │   ├── stage-07-assemble.mjs        # ffmpeg assembly
 │   └── stage-08-review.mjs          # Upload unlisted, notify via Telegram
@@ -81,7 +81,7 @@ streams/youtube/
 │   ├── settings.mjs            # getSetting() / setSetting()
 │   ├── cost-tracker.mjs        # CostTracker class + BudgetCapExceededError
 │   ├── retry.mjs               # withRetry() with exponential backoff
-│   ├── image-gen.mjs           # Google AI Imagen wrapper
+│   ├── image-gen.mjs           # Gemini 3.1 Flash Image wrapper
 │   ├── wan.mjs                 # Wan 2.6 video generation wrapper
 │   ├── tts.mjs                 # ElevenLabs TTS + SSML builder
 │   ├── tts-takes.mjs           # 2-take generation + auto-select
@@ -148,16 +148,14 @@ All pipeline approvals go through Telegram via Heimdall (dedicated approval bot 
 
 ## Feedback Collection Mode
 
-For the **first 10 videos**, every automated stage (3-7) sends assets to Telegram for Darl's review. This builds the dataset to calibrate the AI systems.
+Controlled by the `FEEDBACK_MODE` environment variable (see `lib/settings.mjs`).
 
-After 10 videos, stages 3-7 run automatically with quality gates. Stages 1B, 2, and 8 remain human-gated **permanently**.
+- **Unset or `false` (default):** auto-mode. Stages 3–7 run without Telegram approval, sending only progress notifications.
+- **`FEEDBACK_MODE=true`:** every automated stage (3–7) sends assets to Telegram for per-scene/per-asset approval. Used for tuning runs.
 
-Settings controlling this:
-```
-feedback_collection_mode:      true/false
-feedback_collection_target:    10
-feedback_collection_completed: 0-N
-```
+Stages 1B, 2, and 8 are human-gated in both modes.
+
+> Note: the `feedback_collection_mode` / `_target` / `_completed` rows in `pipeline_settings` are legacy seeds from `seed-pipeline-settings.mjs` — no stage reads or increments them. The env var is the only switch.
 
 ---
 
@@ -178,7 +176,7 @@ See `.env.example` for all required variables.
 
 Key services:
 - **Supabase** — Database + Storage
-- **Google AI** — Scene image generation (Imagen)
+- **Google AI** — Scene image generation (Gemini 3.1 Flash Image)
 - **Wan 2.6** — Video animation
 - **ElevenLabs** — Tamil TTS (multilingual v2)
 - **YouTube Data API** — Upload + publish

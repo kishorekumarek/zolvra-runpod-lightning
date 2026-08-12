@@ -1,11 +1,13 @@
 // stages/stage-08-review.mjs — Finalize + store in video_queue (no YouTube upload)
-// REWRITTEN for pipeline schema rewrite: reads from DB via pipeline_state FKs.
+// Reads final video + SEO via pipeline_state FKs. When teasers are enabled, also
+// enqueues each successfully-assembled teaser as a child row (parent_task_id FK).
 import 'dotenv/config';
 import { promises as fs } from 'fs';
+import { randomUUID } from 'crypto';
 import { getSupabase } from '../lib/supabase.mjs';
 import { sendTelegramMessage } from '../lib/telegram.mjs';
 import {
-  getPipelineState, getConcept, getYoutubeSeo, getVideoOutput,
+  getPipelineState, getConcept, getYoutubeSeo, getVideoOutput, getTeasers,
 } from '../lib/pipeline-db.mjs';
 
 const STAGE = 8;
@@ -75,10 +77,48 @@ export async function runStage8(taskId, tracker, state = {}) {
   }
   console.log(`  ✓ video_queue row inserted (status=ready, type=${videoType})`);
 
+  // ── Also enqueue any successfully-assembled teasers ───────────────
+  let teaserCount = 0;
+  if (concept.teasers_enabled) {
+    const teasers = await getTeasers(taskId);
+    const assembledTeasers = teasers.filter(t => t.status === 'assembled' && t.local_video_path);
+
+    for (const t of assembledTeasers) {
+      // Each teaser gets its own video_queue row with parent_task_id linking back to this long video.
+      // Generating a fresh UUID as task_id keeps the UNIQUE(task_id) constraint intact.
+      const teaserTaskId = randomUUID();
+      const description =
+        `${t.hook_text ? t.hook_text + '\n\n' : ''}` +
+        `Full video: <PARENT_VIDEO_URL>\n\n` +
+        `#Shorts`;
+
+      const { error: teaserInsertErr } = await sb.from('video_queue').insert({
+        task_id:          teaserTaskId,
+        parent_task_id:   taskId,
+        title:            t.title_text,
+        video_type:       'short',
+        local_video_path: t.local_video_path,
+        video_url:        null,
+        youtube_seo:      { title: t.title_text, description, tags: seo.tags },
+        status:           'ready',
+      });
+
+      if (teaserInsertErr) {
+        console.warn(`  ⚠️  Failed to enqueue teaser ${t.teaser_number}: ${teaserInsertErr.message}`);
+      } else {
+        teaserCount++;
+      }
+    }
+    if (teaserCount > 0) {
+      console.log(`  ✓ ${teaserCount} teaser(s) queued with parent_task_id=${taskId}`);
+    }
+  }
+
   // ── Notify Telegram ────────────────────────────────────────────────
   const durationStr = finalDurationSeconds ? `${finalDurationSeconds.toFixed(1)}s` : '?';
+  const teaserLine = teaserCount > 0 ? `\n🎬 ${teaserCount} teaser Short(s) also queued` : '';
   await sendTelegramMessage(
-    `🎬 ${title} ready for review!\n\n` +
+    `🎬 ${title} ready for review!${teaserLine}\n\n` +
     `📁 Saved locally (${videoType}, ${durationStr})\n` +
     `📂 ${videoOutput.local_video_path}\n\n` +
     `Run \`node scripts/publish-video.mjs ${taskId}\` to upload to YouTube.`

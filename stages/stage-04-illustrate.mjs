@@ -1,6 +1,5 @@
-// stages/stage-04-illustrate.mjs — Scene image generation via Google AI Imagen
-// REWRITTEN for pipeline schema rewrite: reads from DB, writes to scenes table.
-// Dual-write: also returns old sceneImagePaths for un-rewritten Stage 5.
+// stages/stage-04-illustrate.mjs — Scene image generation via Gemini 3.1 Flash Image
+// Reads scenes + episode_characters from DB, writes image_url/prompt_used/image_status to scenes table.
 import 'dotenv/config';
 import { promises as fs } from 'fs';
 import { join } from 'path';
@@ -91,6 +90,21 @@ export async function runStage4(taskId, tracker, state = {}) {
       imagePath = result.imagePath;
       storagePath = result.storagePath;
       sceneImagePaths[sceneNum] = { imagePath, storagePath };
+
+      // Teaser variant: scenes marked is_teaser also get a 9:16 image for Shorts use.
+      // Only runs when video is long AND scene is teaser-flagged AND teaser 9:16 isn't already generated.
+      if (scene.is_teaser && !scene.image_url_teaser) {
+        try {
+          await illustrateSceneTeaser({
+            taskId, scene, epCharMap, referenceImageBuffers, tmpDir, tracker, artStyle,
+          });
+        } catch (teaserErr) {
+          // Teaser gen failure is non-fatal — the long video can still complete.
+          // Stage 7b will skip teasers that don't have 9:16 assets.
+          console.warn(`  ⚠️  Scene ${sceneNum} teaser image failed (non-fatal): ${teaserErr.message}`);
+          await sendTelegramMessage(`⚠️ Scene ${sceneNum} teaser (9:16) image failed — long video unaffected`);
+        }
+      }
     } catch (err) {
       failureCount++;
       console.warn(`  ⚠️  Scene ${sceneNum} failed: ${err.message}`);
@@ -142,7 +156,8 @@ export async function runStage4(taskId, tracker, state = {}) {
       await updateScene(taskId, sceneNum, { image_approved: true });
     }
 
-    // 7s delay before next scene to stay within Imagen 10 req/min quota
+    // 7s delay before next scene to stay within Gemini image 10 req/min quota.
+    // Teaser dual-gen counts toward the quota too — scene.is_teaser adds one extra call above.
     if (scene !== scenes[scenes.length - 1]) {
       await new Promise(r => setTimeout(r, 7000));
     }
@@ -211,5 +226,54 @@ async function illustrateScene({ taskId, scene, epCharMap, referenceImageBuffers
   tracker.addCost(STAGE, cost);
 
   console.log(`  ✓ Scene ${scene.scene_number} illustrated ($${cost.toFixed(4)})`);
+  return { scene, imagePath, storagePath };
+}
+
+/**
+ * Generate the 9:16 teaser variant for a teaser-flagged scene.
+ * Reuses the same character refs + visual_description, but with 9:16 aspect ratio.
+ * Stores result in scenes.image_url_teaser.
+ */
+async function illustrateSceneTeaser({ taskId, scene, epCharMap, referenceImageBuffers, tmpDir, tracker, artStyle }) {
+  const speakerKey = scene.speaker?.toLowerCase();
+  const character = epCharMap[speakerKey] || null;
+  const charForPrompt = character ? { image_prompt: character.image_prompt, description: character.image_prompt } : null;
+
+  const prompt = buildScenePrompt(scene, charForPrompt, { aspectRatio: '9:16', artStyle });
+  console.log(`  Generating 9:16 teaser image for scene ${scene.scene_number}...`);
+
+  const sceneCharacterKeys = scene.characters?.length
+    ? scene.characters
+    : (scene.speaker ? [scene.speaker] : []);
+  const referenceImages = sceneCharacterKeys
+    .map(key => referenceImageBuffers[key] || referenceImageBuffers[key?.toLowerCase()])
+    .filter(Boolean)
+    .slice(0, 4);
+
+  const imageBuffer = await withRetry(
+    () => generateSceneImage({ prompt, sceneNumber: scene.scene_number, aspectRatio: '9:16', referenceImages }),
+    { maxRetries: 3, baseDelayMs: 15000, stage: STAGE, taskId }
+  );
+
+  const scenesDir = join(tmpDir, 'scenes');
+  await fs.mkdir(scenesDir, { recursive: true });
+  const imagePath = join(scenesDir, `scene_${String(scene.scene_number).padStart(2, '0')}_image_teaser.png`);
+  await fs.writeFile(imagePath, imageBuffer);
+
+  const storagePath = await uploadSceneImage({
+    videoId: taskId,
+    sceneNumber: scene.scene_number,
+    buffer: imageBuffer,
+    variant: 'teaser',
+  });
+
+  await new Promise(r => setTimeout(r, 2000));
+
+  await updateScene(taskId, scene.scene_number, { image_url_teaser: storagePath });
+
+  const cost = calcImageCost(1, 'fast');
+  tracker.addCost(STAGE, cost);
+
+  console.log(`  ✓ Scene ${scene.scene_number} teaser 9:16 illustrated ($${cost.toFixed(4)})`);
   return { scene, imagePath, storagePath };
 }

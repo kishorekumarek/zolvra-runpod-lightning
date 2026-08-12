@@ -15,7 +15,7 @@ node scripts/launch-pipeline-from-story.mjs <story-file> [short|long]
 cat story.txt | node scripts/launch-pipeline-from-story.mjs - [short|long]
 ```
 - `short` (default): YouTube Shorts, 9:16, 9 scenes, ~90s
-- `long`: Standard video, 16:9, 24 scenes, ~4min
+- `long`: Standard video, 16:9, 15 scenes, ~2.5min
 
 ### Resume a failed/crashed pipeline
 ```bash
